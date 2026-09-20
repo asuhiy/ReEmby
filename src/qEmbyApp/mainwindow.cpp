@@ -1,0 +1,1463 @@
+#include "mainwindow.h"
+#include <qembycore.h>
+#include "views/public/loginview.h"
+#include "views/media/playerview.h" 
+#include "views/user/homeview.h"
+#include "components/searchcompleterpopup.h"
+#include "components/searchhistorypopup.h"
+#include "managers/thememanager.h" 
+#include "managers/searchhistorymanager.h"
+#include "managers/traymanager.h"  
+#include "managers/updatemanager.h"
+#include "config/configstore.h"    
+#include "config/config_keys.h"    
+#include "utils/contextmenuutils.h"
+#include <services/manager/servermanager.h>
+#include <api/networkmanager.h>
+#include "components/moderntoast.h"
+#include <QStackedWidget>
+#include <QDebug>
+#include <QApplication>
+#include <QGuiApplication>
+#include <QAbstractItemView>
+#include <QFile>
+#include <QTimer>
+#include <QElapsedTimer>
+#include <QVBoxLayout>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
+#include <QAction>
+#include <QCompleter>
+#include <QFrame>
+#include <QStringListModel>
+#include <QPropertyAnimation>
+#include <QScreen>
+#include <QParallelAnimationGroup>
+#include <QGraphicsOpacityEffect>
+#include <services/auth/authservice.h>
+#include "components/themetransitionwidget.h"
+#include "components/moderntoast.h" 
+#include "components/modernmessagebox.h"
+#include "components/updatedialog.h"
+#include "components/updateindicatorbutton.h"
+#include "components/updateprogressdialog.h"
+#include <QPropertyAnimation>
+#include <QEasingCurve>
+#include <QFocusEvent>
+#include <QLineF>
+#include <QtMath>
+#include <QKeyEvent>
+#include <QMouseEvent>
+#include <QDialog>
+
+#include <QWKWidgets/widgetwindowagent.h>
+#include <widgetframe/windowbar.h>
+#include <widgetframe/windowbutton.h>
+
+static inline void emulateLeaveEvent(QWidget *widget) {
+    Q_ASSERT(widget);
+    if (!widget) return;
+    QTimer::singleShot(0, widget, [widget]() {
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 14, 0))
+        const QScreen *screen = widget->screen();
+#else
+        const QScreen *screen = widget->windowHandle()->screen();
+#endif
+        const QPoint globalPos = QCursor::pos(screen);
+        if (!QRect(widget->mapToGlobal(QPoint{0, 0}), widget->size()).contains(globalPos)) {
+            QCoreApplication::postEvent(widget, new QEvent(QEvent::Leave));
+            if (widget->testAttribute(Qt::WA_Hover)) {
+                const QPoint localPos = widget->mapFromGlobal(globalPos);
+                const QPoint scenePos = widget->window()->mapFromGlobal(globalPos);
+                static constexpr const auto oldPos = QPoint{};
+                const Qt::KeyboardModifiers modifiers = QGuiApplication::keyboardModifiers();
+#if (QT_VERSION >= QT_VERSION_CHECK(6, 4, 0))
+                const auto event = new QHoverEvent(QEvent::HoverLeave, scenePos, globalPos, oldPos, modifiers);
+                Q_UNUSED(localPos);
+#elif (QT_VERSION >= QT_VERSION_CHECK(6, 3, 0))
+                const auto event =  new QHoverEvent(QEvent::HoverLeave, localPos, globalPos, oldPos, modifiers);
+                Q_UNUSED(scenePos);
+#else
+                const auto event =  new QHoverEvent(QEvent::HoverLeave, localPos, oldPos, modifiers);
+                Q_UNUSED(scenePos);
+#endif
+                QCoreApplication::postEvent(widget, event);
+            }
+        }
+    });
+}
+
+MainWindow::MainWindow(QWidget *parent)
+    : QMainWindow(parent)
+{
+    m_core = new QEmbyCore(this);
+
+    // 服务器不可用（HTTP 5xx，如 nginx 504 Gateway Time-out）或请求超时时
+    // 弹全局提示。否则媒体库只会显示占位卡片、点不动，用户容易误判成客户端
+    // 故障。NetworkManager 侧已做 30s 节流，批量请求失败也只提示一次。
+    connect(m_core->networkManager(), &NetworkManager::serverUnavailable, this,
+            [this](int httpStatus) {
+                ModernToast::showMessage(
+                    tr("服务器无响应（HTTP %1），请检查 Emby 服务或反向代理")
+                        .arg(httpStatus),
+                    5000);
+            });
+
+    
+    m_trayManager = new TrayManager(this);
+    connect(m_trayManager, &TrayManager::showMainRequested, this, [this]() {
+        
+        
+        
+        show();
+        raise();
+        activateWindow();
+
+        
+        if (m_hadPlayerWhenHiddenToTray) {
+            const bool shouldResumePlaying = m_wasPausedByTray;
+            m_hadPlayerWhenHiddenToTray = false;
+            m_wasPausedByTray = false;
+            QTimer::singleShot(0, this, [this, shouldResumePlaying]() {
+                if (auto *player = m_homeView->activePlayerView()) {
+                    player->restoreAfterWindowShow(shouldResumePlaying);
+                }
+            });
+        }
+    });
+    connect(m_trayManager, &TrayManager::quitRequested, this, [this]() {
+        m_realQuit = true; 
+        
+        if (auto *player = m_homeView->activePlayerView()) {
+            player->stopAndReport();
+            
+            QElapsedTimer wait;
+            wait.start();
+            while (wait.elapsed() < 500) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            }
+        }
+        if(m_core && m_core->authService()) {
+            m_core->authService()->logout();
+        }
+        qApp->quit(); 
+    });
+    
+
+    
+    m_backClickTimer.invalidate();
+
+#if (defined(Q_OS_MACOS) || defined(Q_OS_MAC)) && \
+    (QT_VERSION >= QT_VERSION_CHECK(6, 9, 0))
+    setWindowFlag(Qt::ExpandedClientAreaHint, true);
+    setWindowFlag(Qt::NoTitleBarBackgroundHint, true);
+    setAttribute(Qt::WA_ContentsMarginsRespectsSafeArea, false);
+#endif
+
+    auto agent = new QWK::WidgetWindowAgent(this);
+    agent->setup(this);
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+    agent->setWindowAttribute("no-system-buttons", false);
+#endif
+
+    QPalette pal = palette();
+    pal.setColor(QPalette::Window, QColor(241, 245, 249)); 
+    setPalette(pal);
+    setAutoFillBackground(true);
+
+    
+    // 标题栏只显示应用名（ReEmby）。此前还拼了版本号与构建哈希，方便用户
+    // 核对下载的包对应哪个提交；但这两项对普通用户是噪音，去掉。
+    const QString appTitle = qApp->applicationName();
+    auto titleLabel = new QLabel(appTitle);
+    titleLabel->setAlignment(Qt::AlignLeft | Qt::AlignTop);
+    titleLabel->setObjectName(QStringLiteral("win-title-label"));
+    titleLabel->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Minimum);
+    setWindowTitle(appTitle);
+    titleLabel->setContentsMargins(0, 5, 0, 0);
+
+    auto iconButton = new QWK::WindowButton();
+    iconButton->setObjectName(QStringLiteral("icon-button"));
+    iconButton->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    iconButton->setIconNormal(qApp->windowIcon());
+    iconButton->setIconSize(QSize(16, 16));
+
+    auto themeButton = new QWK::WindowButton();
+    themeButton->setCheckable(true);
+    themeButton->setObjectName(QStringLiteral("theme-button"));
+    themeButton->setProperty("system-button", true);
+    themeButton->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    themeButton->setIconNormal(QIcon(":/svg/moon.svg"));
+    themeButton->setIconSize(QSize(15, 15));
+    themeButton->setChecked(true);
+
+    auto minButton = new QWK::WindowButton();
+    minButton->setObjectName(QStringLiteral("min-button"));
+    minButton->setProperty("system-button", true);
+    minButton->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+
+    auto maxButton = new QWK::WindowButton();
+    maxButton->setCheckable(true);
+    maxButton->setObjectName(QStringLiteral("max-button"));
+    maxButton->setProperty("system-button", true);
+    maxButton->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+
+    auto closeButton = new QWK::WindowButton();
+    closeButton->setObjectName(QStringLiteral("close-button"));
+    closeButton->setProperty("system-button", true);
+    closeButton->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+
+    auto backButton = new QWK::WindowButton();
+    backButton->setObjectName(QStringLiteral("back-button"));
+    backButton->setProperty("system-button", true);
+    backButton->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    backButton->setShortcut(QKeySequence::Back);
+    backButton->hide();
+
+    auto homeButton = new QWK::WindowButton();
+    homeButton->setObjectName(QStringLiteral("home-button"));
+    homeButton->setProperty("system-button", true);
+    homeButton->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    homeButton->hide();
+
+    auto favButton = new QWK::WindowButton();
+    favButton->setObjectName(QStringLiteral("fav-button"));
+    favButton->setProperty("system-button", true);
+    favButton->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    favButton->hide();
+
+    
+    
+    
+    connect(backButton, &QWK::WindowButton::clicked, this, [this]() {
+        if (m_viewStack->currentWidget() == m_homeView) {
+            if (m_homeView->canNavigateBack()) {
+                
+                m_homeView->navigateBack();
+                m_backClickTimer.invalidate(); 
+            } else if (m_homeView->canGoHome()) {
+                
+                m_homeView->goHome();
+                m_backClickTimer.invalidate();
+            } else {
+                
+                if (m_backClickTimer.isValid() && m_backClickTimer.elapsed() < 2000) {
+                    
+                    m_backClickTimer.invalidate(); 
+                    navigateToLogin(); 
+                } else {
+                    
+                    m_backClickTimer.start();
+                    ModernToast::showMessage(tr("Press Back again to logout"));
+                }
+            }
+        }
+    });
+
+    connect(homeButton, &QWK::WindowButton::clicked, this, [this]() {
+        if (m_viewStack->currentWidget() == m_homeView) {
+            
+            if (!m_homeView->canGoHome()) {
+                ModernToast::showMessage(tr("Refreshing Home..."), 1000);
+            }
+            m_homeView->goHome();
+        }
+    });
+
+    connect(favButton, &QWK::WindowButton::clicked, this, [this]() {
+        if (m_viewStack->currentWidget() == m_homeView) {
+            
+            if (!m_homeView->canGoFav()) {
+                ModernToast::showMessage(tr("Refreshing Favorites..."), 1000);
+            }
+            m_homeView->goFav();
+        }
+    });
+
+    auto windowBar = new QWK::WindowBar();
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+    windowBar->layout()->setContentsMargins(80, 0, 0, 0);
+#endif
+    windowBar->setIconButton(iconButton);
+    windowBar->setPinButton(themeButton);
+#if !defined(Q_OS_MACOS) && !defined(Q_OS_MAC)
+    windowBar->setMinButton(minButton);
+    windowBar->setMaxButton(maxButton);
+    windowBar->setCloseButton(closeButton);
+#else
+    minButton->setParent(windowBar);
+    maxButton->setParent(windowBar);
+    closeButton->setParent(windowBar);
+    minButton->hide();
+    maxButton->hide();
+    closeButton->hide();
+#endif
+    windowBar->setTitleLabel(titleLabel);
+    // Back/home/fav buttons are NOT handed to the WindowBar slots: they are
+    // laid out inside the center container next to the server pill (see the
+    // centerLayout setup above) so the order is [pill][back][home][fav].
+    windowBar->setHostWidget(this);
+
+    
+    m_globalSearchBox = new QLineEdit(windowBar);
+    m_globalSearchBox->setObjectName("titlebar-search");
+    m_globalSearchBox->setPlaceholderText(tr("Search..."));
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+    m_globalSearchBox->setFixedSize(380, 30);
+#else
+    m_globalSearchBox->setFixedSize(380, 32); 
+#endif
+    m_globalSearchBox->setClearButtonEnabled(true);
+    
+    auto *searchAction = new QAction(QIcon(":/svg/light/search.svg"), tr("Search"), this);
+    m_globalSearchBox->addAction(searchAction, QLineEdit::LeadingPosition);
+    m_globalSearchBox->hide();
+
+    auto *macCenteredTitleLabel = new QLabel(windowBar);
+    macCenteredTitleLabel->setObjectName("mac-title-label");
+    macCenteredTitleLabel->setAlignment(Qt::AlignCenter);
+    macCenteredTitleLabel->setSizePolicy(QSizePolicy::Minimum, QSizePolicy::Preferred);
+    macCenteredTitleLabel->hide();
+
+    connect(m_globalSearchBox, &QLineEdit::returnPressed, this,
+            [this]() { submitGlobalSearch(m_globalSearchBox->text()); });
+
+    auto *centerContainer = new QWidget(windowBar);
+    auto *centerLayout = new QHBoxLayout(centerContainer);
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+    centerLayout->setContentsMargins(0, 1, 0, 1);
+#else
+    centerLayout->setContentsMargins(0, 0, 0, 0);
+#endif
+    centerLayout->setSpacing(0);
+
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+    auto *macTitlebarNavSpacer = new QWidget(centerContainer);
+    macTitlebarNavSpacer->setObjectName("mac-titlebar-nav-spacer");
+    macTitlebarNavSpacer->setFixedWidth(150);
+    macTitlebarNavSpacer->hide();
+
+    auto *macTitlebarNav = new QWidget(centerContainer);
+    macTitlebarNav->setObjectName("mac-titlebar-nav");
+    auto *macTitlebarNavLayout = new QHBoxLayout(macTitlebarNav);
+    macTitlebarNavLayout->setContentsMargins(0, 0, 0, 0);
+    macTitlebarNavLayout->setSpacing(0);
+    macTitlebarNavLayout->addWidget(backButton);
+    macTitlebarNavLayout->addWidget(homeButton);
+    macTitlebarNavLayout->addWidget(favButton);
+    macTitlebarNav->setFixedWidth(150);
+    macTitlebarNav->hide();
+
+    centerLayout->addWidget(macTitlebarNavSpacer);
+#else
+    // Windows titlebar layout: [server pill][back][home][fav] pinned to the
+    // left edge, then the centered search box. The pill is the sole
+    // server-switcher entry point; home/fav sit to its right (user-approved
+    // mockup v3). The buttons are no longer handed to QWK::WindowBar slots —
+    // they live in the center container instead.
+    m_serverPill = new QPushButton(centerContainer);
+    m_serverPill->setObjectName(QStringLiteral("titlebar-server-pill"));
+    m_serverPill->setCursor(Qt::PointingHandCursor);
+    m_serverPill->setFlat(true);
+    m_serverPill->setToolTip(tr("Switch server"));
+    m_serverPill->hide();
+    connect(m_serverPill, &QPushButton::clicked, this, [this]() {
+        if (m_viewStack->currentWidget() == m_homeView) {
+            m_homeView->showServerSwitcher(m_serverPill);
+        }
+    });
+
+    centerLayout->addWidget(m_serverPill, 0, Qt::AlignVCenter);
+    centerLayout->addSpacing(6);
+    centerLayout->addWidget(backButton, 0, Qt::AlignVCenter);
+    centerLayout->addWidget(homeButton, 0, Qt::AlignVCenter);
+    centerLayout->addWidget(favButton, 0, Qt::AlignVCenter);
+    // No trailing spacing needed: the fav-button QSS rule already carries
+    // margin-right: 10px.
+#endif
+    centerLayout->addStretch();
+    centerLayout->addWidget(m_globalSearchBox, 0, Qt::AlignVCenter); 
+    centerLayout->addWidget(macCenteredTitleLabel, 0, Qt::AlignVCenter);
+    centerLayout->addStretch();
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+    centerLayout->addWidget(macTitlebarNav);
+#endif
+    centerContainer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+
+    windowBar->setCenterWidget(centerContainer);
+
+    
+    m_updateButton = new UpdateIndicatorButton(centerContainer);
+    m_updateButton->setObjectName(QStringLiteral("titlebar-update-button"));
+    m_updateButton->setCursor(Qt::PointingHandCursor);
+    m_updateButton->setToolTip(tr("A new ReEmby version is available"));
+    m_updateButton->hide();
+    connect(m_updateButton, &UpdateIndicatorButton::clicked, this,
+            &MainWindow::showUpdateConfirmation);
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+    centerLayout->insertWidget(1, m_updateButton, 0, Qt::AlignVCenter);
+#else
+    // Insert after the server pill (index 0) so the update indicator stays
+    // within the left-side button group instead of pushing the pill right.
+    centerLayout->insertWidget(1, m_updateButton, 0, Qt::AlignVCenter);
+#endif
+
+
+    agent->setTitleBar(windowBar);
+
+    agent->setHitTestVisible(themeButton, true);
+    agent->setHitTestVisible(m_globalSearchBox, true);
+    agent->setHitTestVisible(m_updateButton, true);
+    // Back/home/fav now live in the center container (next to the server
+    // pill) instead of QWK WindowBar slots, so register them for hit-testing
+    // explicitly — otherwise the frameless titlebar would swallow clicks.
+    agent->setHitTestVisible(backButton, true);
+    agent->setHitTestVisible(homeButton, true);
+    agent->setHitTestVisible(favButton, true);
+    if (m_serverPill) {
+        agent->setHitTestVisible(m_serverPill, true);
+    }
+    agent->setSystemButton(QWK::WindowAgentBase::WindowIcon, iconButton);
+#if !defined(Q_OS_MACOS) && !defined(Q_OS_MAC)
+    agent->setSystemButton(QWK::WindowAgentBase::Minimize, minButton);
+    agent->setSystemButton(QWK::WindowAgentBase::Maximize, maxButton);
+    agent->setSystemButton(QWK::WindowAgentBase::Close, closeButton);
+#endif
+    agent->setSystemButton(QWK::WindowAgentBase::Back, backButton);
+    agent->setSystemButton(QWK::WindowAgentBase::Home, homeButton);
+    agent->setSystemButton(QWK::WindowAgentBase::Fav, favButton);
+#if defined(Q_OS_MAC)
+    agent->setSystemButtonAreaCallback([](const QSize &size) {
+        return QRect(QPoint(0, 0), QSize(80, size.height()));
+    });
+#endif
+
+    setMenuWidget(windowBar);
+
+    auto *updateManager = UpdateManager::instance();
+    connect(updateManager, &UpdateManager::updateAvailable, this,
+            [this](const UpdateInfo &info, UpdateManager::CheckMode mode) {
+                if (mode != UpdateManager::CheckMode::Automatic) {
+                    return;
+                }
+                m_availableUpdate = info;
+                m_hasAvailableUpdate = true;
+                m_updateButton->setToolTip(
+                    tr("ReEmby %1 is available").arg(info.version));
+                m_updateButton->show();
+            });
+    connect(updateManager, &UpdateManager::updateOpened, this,
+            [this](const QString &) {
+                m_hasAvailableUpdate = false;
+                m_updateButton->hide();
+            });
+    connect(ConfigStore::instance(), &ConfigStore::valueChanged, this,
+            [this](const QString &key, const QVariant &value) {
+                if (key == ConfigKeys::CheckForUpdates && !value.toBool()) {
+                    m_hasAvailableUpdate = false;
+                    m_updateButton->hide();
+                }
+            });
+
+    if (ConfigStore::instance()->get<bool>(ConfigKeys::CheckForUpdates, true)) {
+        QTimer::singleShot(1500, updateManager, [updateManager]() {
+            updateManager->checkForUpdates(UpdateManager::CheckMode::Automatic);
+        });
+    }
+
+    
+    m_viewStack = new QStackedWidget(this);
+    m_viewStack->setObjectName("main-view-stack"); 
+    m_viewStack->setPalette(pal);
+    m_viewStack->setAutoFillBackground(true);
+    setCentralWidget(m_viewStack);
+
+    m_loginView = new LoginView(m_core, this);
+    m_homeView = new HomeView(m_core, this);
+    setupGlobalSearchHistory();
+
+    m_viewStack->addWidget(m_loginView);
+    m_viewStack->addWidget(m_homeView);
+
+    
+    connect(m_viewStack, &QStackedWidget::currentChanged, this, [this](int index) {
+        QWidget *currentView = m_viewStack->widget(index);
+        if (!currentView) return;
+
+        bool showSearch = currentView->property("showGlobalSearch").toBool();
+        m_globalSearchBox->setVisible(showSearch);
+        if (!showSearch) {
+            hideGlobalSearchTransientUi();
+        }
+        
+        auto back = findChild<QWK::WindowButton*>("back-button");
+        auto icon = findChild<QWK::WindowButton*>("icon-button");
+        auto home = findChild<QWK::WindowButton*>("home-button");
+        auto fav = findChild<QWK::WindowButton*>("fav-button");
+        auto title = findChild<QLabel*>("win-title-label");
+        auto macTitle = findChild<QLabel*>("mac-title-label");
+        auto macNav = findChild<QWidget*>("mac-titlebar-nav");
+        auto macNavSpacer = findChild<QWidget*>("mac-titlebar-nav-spacer");
+        
+        
+        if (currentView == m_homeView) {
+            if (back) {
+                back->setVisible(true);
+
+                back->setEnabled(true);
+            }
+            if (icon) icon->setVisible(false);
+            if (home)
+            {
+                home->setVisible(true);
+
+                home->setEnabled(true);
+            }
+            if (fav)
+            {
+                fav->setVisible(true);
+
+                fav->setEnabled(true);
+            }
+            if (m_serverPill) {
+                updateServerPill();
+                m_serverPill->setVisible(true);
+            }
+        } else {
+            
+            bool showBack = currentView->property("showGlobalBack").toBool();
+            if (back) {
+                back->setVisible(showBack);
+                back->setEnabled(true); 
+            }
+            if (icon) icon->setVisible(!showBack);
+            bool showHome = currentView->property("showGlobalHome").toBool();
+            if (home)
+            {
+                home->setVisible(showHome);
+                home->setEnabled(true);
+            }
+            bool showFav = currentView->property("showGlobalFav").toBool();
+            if (fav)
+            {
+                fav->setVisible(showFav);
+                fav->setEnabled(true);
+            }
+            if (m_serverPill) {
+                m_serverPill->setVisible(false);
+            }
+        }
+
+        QVariant customTitle = currentView->property("viewTitle");
+        if (customTitle.isValid()) {
+            if (title) {
+                title->setText(customTitle.toString());
+            }
+            if (macTitle) {
+                macTitle->setText(customTitle.toString());
+            }
+        }
+
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+        const bool useCenteredLoginTitle = (currentView == m_loginView);
+        const bool showMacTitlebarNav = (currentView == m_homeView);
+        if (icon) {
+            icon->setVisible(false);
+        }
+        if (title) {
+            title->setVisible(false);
+        }
+        if (macTitle) {
+            macTitle->setVisible(useCenteredLoginTitle);
+        }
+        if (macNav) {
+            macNav->setVisible(showMacTitlebarNav);
+        }
+        if (macNavSpacer) {
+            macNavSpacer->setVisible(showMacTitlebarNav);
+        }
+#else
+        if (macTitle) {
+            macTitle->hide();
+        }
+#endif
+    });
+
+    
+    connect(m_homeView, &HomeView::immersiveStateChanged, this, [this, agent](bool isImmersive) {
+        if (this->menuWidget()) {
+            this->menuWidget()->setVisible(!isImmersive);
+        }
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+        if (!isImmersive) {
+            agent->setWindowAttribute("no-system-buttons", false);
+        }
+#else
+        Q_UNUSED(agent);
+#endif
+    });
+
+    connect(m_homeView, &HomeView::playerChromeVisibilityChanged, this,
+            [this, agent](bool visible) {
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+                if (m_homeView && m_homeView->activePlayerView()) {
+                    agent->setWindowAttribute("no-system-buttons", !visible);
+                }
+#else
+                Q_UNUSED(visible);
+                Q_UNUSED(agent);
+#endif
+            });
+
+    
+    connect(m_homeView, &HomeView::canNavigateBackChanged, this, [this](bool canBack) {
+        
+        
+        
+        
+        
+    });
+
+    connect(m_homeView, &HomeView::homeContentSwitched, this, [this] () {
+        
+        
+        
+        
+        
+        
+        
+    });
+
+    connect(m_loginView, &LoginView::loginCompleted, this, &MainWindow::navigateToHome);
+    connect(m_homeView, &HomeView::logoutRequested, this, &MainWindow::navigateToLogin);
+
+
+    connect(windowBar, &QWK::WindowBar::pinRequested, this, [this, themeButton](bool checked) {
+        themeButton->setChecked(checked);
+
+        hideGlobalSearchTransientUi();
+
+        
+        QString newMode = checked ? "dark" : "light";
+        
+        themeButton->blockSignals(true);
+        if (checked) {
+            themeButton->setIconNormal(QIcon(":/svg/moon.svg"));
+        } else {
+            themeButton->setIconNormal(QIcon(":/svg/sun.svg"));
+        }
+        themeButton->blockSignals(false);
+
+        
+        bool reduceAnimations = ConfigStore::instance()->get<bool>(ConfigKeys::UiAnimations, false);
+        if (reduceAnimations) {
+            m_themeAnimating = true;
+            ConfigStore::instance()->set(ConfigKeys::ThemeMode, newMode);
+            m_themeAnimating = false;
+            return;
+        }
+
+        
+        QPixmap snapshot = this->grab();
+
+        
+        QPoint center = themeButton->mapTo(this, themeButton->rect().center());
+
+        
+        auto transition = new ThemeTransitionWidget(snapshot, center, this);
+        transition->setGeometry(this->rect());
+        transition->raise(); 
+        transition->show();
+
+        
+        int maxRadius = qMax(
+                            qMax(QLineF(center, QPoint(0, 0)).length(), QLineF(center, QPoint(width(), 0)).length()),
+                            qMax(QLineF(center, QPoint(0, height())).length(), QLineF(center, QPoint(width(), height())).length())
+                            ) + 10; 
+
+        
+        m_themeAnimating = true; 
+        ConfigStore::instance()->set(ConfigKeys::ThemeMode, newMode);
+        m_themeAnimating = false;
+
+        
+        auto anim = new QPropertyAnimation(transition, "radius", transition);
+        anim->setDuration(450); 
+        anim->setStartValue(0);
+        anim->setEndValue(maxRadius);
+        
+        anim->setEasingCurve(QEasingCurve::InOutCubic);
+
+        
+        connect(anim, &QPropertyAnimation::finished, transition, &QObject::deleteLater);
+        anim->start(QAbstractAnimation::DeleteWhenStopped);
+    });
+
+
+    connect(windowBar, &QWK::WindowBar::minimizeRequested, this, [this]() {
+        hideGlobalSearchTransientUi();
+        showMinimized();
+    });
+    connect(windowBar, &QWK::WindowBar::maximizeRequested, this, [this, maxButton](bool max) {
+        if (max) {
+            showMaximized();
+        } else {
+            showNormal();
+            
+            QRect screenGeo = screen()->availableGeometry();
+            int w = 1280, h = 800;
+            setGeometry(
+                screenGeo.x() + (screenGeo.width() - w) / 2,
+                screenGeo.y() + (screenGeo.height() - h) / 2,
+                w, h);
+        }
+        emulateLeaveEvent(maxButton);
+    });
+    
+    
+    connect(windowBar, &QWK::WindowBar::closeRequested, this, &QWidget::close);
+
+    
+    QString savedThemeMode = ConfigStore::instance()->get<QString>(ConfigKeys::ThemeMode, "system");
+    ThemeManager::instance()->applyThemeMode(savedThemeMode);
+    
+    bool isDark = ThemeManager::instance()->isDarkMode();
+    themeButton->setChecked(isDark);
+    themeButton->setIconNormal(isDark ? QIcon(":/svg/moon.svg") : QIcon(":/svg/sun.svg"));
+
+    
+    connect(ConfigStore::instance(), &ConfigStore::valueChanged, this,
+            [this, themeButton](const QString &key, const QVariant &newValue) {
+        
+        if (key == ConfigKeys::FontSize) {
+            
+            ThemeManager::instance()->setTheme(ThemeManager::instance()->currentTheme());
+            return;
+        }
+
+        
+        if (key != ConfigKeys::ThemeMode) return;
+        QString mode = newValue.toString();
+        hideGlobalSearchTransientUi();
+
+        
+        if (m_themeAnimating) {
+            ThemeManager::instance()->applyThemeMode(mode);
+            bool dark = ThemeManager::instance()->isDarkMode();
+            themeButton->blockSignals(true);
+            themeButton->setChecked(dark);
+            themeButton->setIconNormal(dark ? QIcon(":/svg/moon.svg") : QIcon(":/svg/sun.svg"));
+            themeButton->blockSignals(false);
+            return;
+        }
+
+        
+        bool reduceAnimations = ConfigStore::instance()->get<bool>(ConfigKeys::UiAnimations, false);
+        if (!reduceAnimations) {
+            
+            QPixmap snapshot = this->grab();
+            QPoint center = this->rect().center(); 
+
+            
+            ThemeManager::instance()->applyThemeMode(mode);
+            bool dark = ThemeManager::instance()->isDarkMode();
+            themeButton->blockSignals(true);
+            themeButton->setChecked(dark);
+            themeButton->setIconNormal(dark ? QIcon(":/svg/moon.svg") : QIcon(":/svg/sun.svg"));
+            themeButton->blockSignals(false);
+
+            
+            auto transition = new ThemeTransitionWidget(snapshot, center, this);
+            transition->setGeometry(this->rect());
+            transition->raise();
+            transition->show();
+
+            int maxRadius = qMax(
+                qMax(QLineF(center, QPoint(0, 0)).length(), QLineF(center, QPoint(width(), 0)).length()),
+                qMax(QLineF(center, QPoint(0, height())).length(), QLineF(center, QPoint(width(), height())).length())
+            ) + 10;
+
+            
+            auto anim = new QPropertyAnimation(transition, "radius", transition);
+            anim->setDuration(450);
+            anim->setStartValue(0);
+            anim->setEndValue(maxRadius);
+            anim->setEasingCurve(QEasingCurve::InOutCubic);
+            connect(anim, &QPropertyAnimation::finished, transition, &QObject::deleteLater);
+            anim->start(QAbstractAnimation::DeleteWhenStopped);
+        } else {
+            
+            ThemeManager::instance()->applyThemeMode(mode);
+            bool dark = ThemeManager::instance()->isDarkMode();
+            themeButton->blockSignals(true);
+            themeButton->setChecked(dark);
+            themeButton->setIconNormal(dark ? QIcon(":/svg/moon.svg") : QIcon(":/svg/sun.svg"));
+            themeButton->blockSignals(false);
+        }
+    });
+
+    
+    minButton->hide();
+    maxButton->hide();
+    m_viewStack->setCurrentWidget(m_loginView);
+#if defined(Q_OS_MACOS) || defined(Q_OS_MAC)
+    iconButton->hide();
+    titleLabel->hide();
+    macCenteredTitleLabel->setText(m_loginView->property("viewTitle").toString());
+    macCenteredTitleLabel->show();
+    if (macTitlebarNav) {
+        macTitlebarNav->hide();
+    }
+    if (macTitlebarNavSpacer) {
+        macTitlebarNavSpacer->hide();
+    }
+#endif
+    resize(m_defaultWidth, m_defaultHeight);
+
+    
+    
+    
+    qApp->installEventFilter(this);
+    connect(qApp, &QGuiApplication::applicationStateChanged, this,
+            [this](Qt::ApplicationState state) {
+                if (state != Qt::ApplicationActive) {
+                    hideGlobalSearchTransientUi();
+                }
+            });
+}
+
+void MainWindow::updateServerPill()
+{
+    // No-op on macOS (no pill) and before login (no active profile yet).
+    if (!m_serverPill) {
+        return;
+    }
+    if (!m_core || !m_core->serverManager()) {
+        return;
+    }
+    const ServerProfile profile = m_core->serverManager()->activeProfile();
+    QString name = profile.name.isEmpty() ? profile.url : profile.name;
+    if (name.isEmpty()) {
+        name = tr("Server");
+    }
+    // Keep an over-long server name from eating the titlebar on narrow windows.
+    if (name.size() > 24) {
+        name = name.left(21) + QStringLiteral("...");
+    }
+    m_serverPill->setText(QStringLiteral("%1 \u25BE").arg(name));
+    m_serverPill->setToolTip(profile.url.isEmpty() ? tr("Switch server")
+                                                   : tr("%1\nClick to switch server").arg(profile.url));
+}
+
+void MainWindow::showUpdateConfirmation()
+{
+    if (!m_hasAvailableUpdate) {
+        return;
+    }
+
+    UpdateDialog dialog(m_availableUpdate, UpdateDialog::Mode::Automatic, this);
+    dialog.exec();
+    if (dialog.decision() == UpdateDialog::Decision::Update) {
+        UpdateProgressDialog::startUpdate(m_availableUpdate, this);
+        return;
+    }
+
+    if (dialog.decision() == UpdateDialog::Decision::RemindLater) {
+        qInfo() << "MainWindow: update reminder dismissed for this session"
+                << "| version=" << m_availableUpdate.version;
+        m_hasAvailableUpdate = false;
+        m_updateButton->hide();
+        return;
+    }
+
+    if (dialog.decision() != UpdateDialog::Decision::IgnoreVersion) {
+        return;
+    }
+
+    ConfigStore::instance()->set(ConfigKeys::IgnoredUpdateVersion,
+                                 m_availableUpdate.version);
+    qInfo() << "MainWindow: update ignored"
+            << "| version=" << m_availableUpdate.version;
+    m_hasAvailableUpdate = false;
+    m_updateButton->hide();
+}
+
+MainWindow::~MainWindow() {}
+
+void MainWindow::setupGlobalSearchHistory()
+{
+    if (!m_globalSearchBox) {
+        return;
+    }
+
+    m_globalSearchModel = new QStringListModel(this);
+    m_globalSearchCompleter = new QCompleter(m_globalSearchModel, this);
+    m_globalSearchCompleter->setCaseSensitivity(Qt::CaseInsensitive);
+    m_globalSearchCompleter->setFilterMode(Qt::MatchContains);
+    m_globalSearchCompleter->setCompletionMode(QCompleter::PopupCompletion);
+    m_globalSearchCompleter->setMaxVisibleItems(8);
+    m_globalSearchCompleter->setPopup(new SearchCompleterPopup());
+    if (auto *popup = qobject_cast<SearchCompleterPopup *>(
+            m_globalSearchCompleter->popup())) {
+        popup->setMaxVisibleRows(m_globalSearchCompleter->maxVisibleItems());
+    }
+    m_globalSearchBox->setCompleter(m_globalSearchCompleter);
+
+    m_globalSearchHistoryPopup = new SearchHistoryPopup(this);
+    // 顶栏搜索与侧栏本服搜索共用 __global__ 共享历史桶（传空 serverId，
+    // effectiveServerBucket 统一映射），不做 per-server 分桶。
+    connect(m_globalSearchHistoryPopup, &SearchHistoryPopup::termActivated, this,
+            [this](const QString &term) {
+                m_globalSearchBox->setText(term);
+                submitGlobalSearch(term);
+            });
+    connect(m_globalSearchHistoryPopup, &SearchHistoryPopup::clearHistoryRequested, this,
+            [this]() {
+                SearchHistoryManager::instance()->clearHistory(QString());
+            });
+    connect(m_globalSearchHistoryPopup, &SearchHistoryPopup::removeHistoryTermRequested,
+            this, [this](const QString &term) {
+                SearchHistoryManager::instance()->removeHistoryTerm(
+                    QString(), term);
+            });
+
+    connect(m_globalSearchBox, &QLineEdit::textEdited, this,
+            [this](const QString &text) {
+                updateGlobalSearchCompleter(text);
+                hideGlobalSearchTransientUi();
+            });
+
+    connect(SearchHistoryManager::instance(), &SearchHistoryManager::historyChanged,
+            this, [this](const QString &serverId) {
+                if (serverId == QStringLiteral("__global__")) {
+                    updateGlobalSearchCompleter(m_globalSearchBox
+                                                    ? m_globalSearchBox->text()
+                                                    : QString());
+                }
+            });
+    connect(SearchHistoryManager::instance(), &SearchHistoryManager::enabledChanged,
+            this, [this](bool enabled) {
+                Q_UNUSED(enabled);
+                updateGlobalSearchCompleter(m_globalSearchBox
+                                                ? m_globalSearchBox->text()
+                                                : QString());
+                hideGlobalSearchTransientUi();
+            });
+    connect(SearchHistoryManager::instance(),
+            &SearchHistoryManager::autocompleteEnabledChanged, this,
+            [this](bool ) {
+                updateGlobalSearchCompleter(m_globalSearchBox
+                                                ? m_globalSearchBox->text()
+                                                : QString());
+            });
+
+    if (m_core && m_core->serverManager()) {
+        connect(m_core->serverManager(), &ServerManager::activeServerChanged, this,
+                [this](const ServerProfile &profile) {
+                    Q_UNUSED(profile);
+                    updateServerPill();
+                    updateGlobalSearchCompleter(m_globalSearchBox
+                                                    ? m_globalSearchBox->text()
+                                                    : QString());
+                    hideGlobalSearchTransientUi();
+                });
+    }
+
+    updateGlobalSearchCompleter();
+}
+
+void MainWindow::hideGlobalSearchTransientUi()
+{
+    if (m_globalSearchHistoryPopup) {
+        const bool immediateHide =
+            QGuiApplication::applicationState() != Qt::ApplicationActive ||
+            !isVisible() || isMinimized() || !isActiveWindow();
+        m_globalSearchHistoryPopup->dismiss(immediateHide);
+    }
+    if (m_globalSearchCompleter && m_globalSearchCompleter->popup()) {
+        m_globalSearchCompleter->popup()->hide();
+    }
+}
+
+void MainWindow::updateGlobalSearchCompleter(const QString &text)
+{
+    if (!m_globalSearchModel || !m_globalSearchCompleter || !m_globalSearchBox) {
+        return;
+    }
+
+    const QStringList suggestions =
+        SearchHistoryManager::instance()->completionSuggestions(
+            QString(), text, 8);
+    m_globalSearchModel->setStringList(suggestions);
+
+    if (!SearchHistoryManager::instance()->isAutocompleteEnabled() ||
+        text.trimmed().isEmpty() ||
+        suggestions.isEmpty() || !m_globalSearchBox->hasFocus()) {
+        if (m_globalSearchCompleter->popup()) {
+            m_globalSearchCompleter->popup()->hide();
+        }
+        return;
+    }
+
+    if (auto *popup = qobject_cast<SearchCompleterPopup *>(
+            m_globalSearchCompleter->popup())) {
+        popup->setHighlightText(text);
+        popup->syncWidthToAnchor(m_globalSearchBox);
+    }
+
+    m_globalSearchCompleter->setCompletionPrefix(text);
+    if (auto *popup = qobject_cast<SearchCompleterPopup *>(
+            m_globalSearchCompleter->popup())) {
+        m_globalSearchCompleter->complete(
+            popup->popupRectForAnchor(m_globalSearchBox));
+        return;
+    }
+
+    m_globalSearchCompleter->complete();
+}
+
+void MainWindow::showGlobalSearchHistoryPopup(const QString &filterText)
+{
+    if (!m_globalSearchBox || !m_globalSearchHistoryPopup ||
+        !SearchHistoryManager::instance()->isEnabled()) {
+        return;
+    }
+
+    if (!isVisible() || isMinimized() || !m_globalSearchBox->isVisible() ||
+        !m_globalSearchBox->hasFocus() ||
+        QGuiApplication::applicationState() != Qt::ApplicationActive ||
+        !isActiveWindow()) {
+        hideGlobalSearchTransientUi();
+        return;
+    }
+
+    // __global__ 共享历史桶（与侧栏本服搜索、搜索记录写入方一致）。
+    const QString serverId;
+    const auto historyEntries =
+        SearchHistoryManager::instance()->historyEntries(serverId, filterText);
+
+    m_globalSearchHistoryPopup->setEntries(historyEntries);
+    if (!m_globalSearchHistoryPopup->hasContent()) {
+        hideGlobalSearchTransientUi();
+        return;
+    }
+
+    // 不在此处 dismiss(true)——showBelow 自身处理「已显示重定位/切换锚点
+    // 重启动画」，而紧贴 showBelow 的 dismiss 会被（原 250ms 防抖等）状态
+    // 吞掉，导致点击搜索框下拉永远弹不出来。
+    if (m_globalSearchCompleter && m_globalSearchCompleter->popup()) {
+        m_globalSearchCompleter->popup()->hide();
+    }
+    m_globalSearchHistoryPopup->showBelow(m_globalSearchBox);
+}
+
+void MainWindow::submitGlobalSearch(const QString &query)
+{
+    if (!m_homeView || m_viewStack->currentWidget() != m_homeView) {
+        return;
+    }
+
+    const QString trimmedQuery = query.trimmed();
+    if (trimmedQuery.isEmpty()) {
+        return;
+    }
+
+    hideGlobalSearchTransientUi();
+
+    m_homeView->triggerSearch(trimmedQuery);
+    m_globalSearchBox->clear();
+    hideGlobalSearchTransientUi();
+}
+
+void MainWindow::navigateToHome()
+{
+    
+    m_homeView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    
+    bool reduceAnimations = ConfigStore::instance()->get<bool>(ConfigKeys::UiAnimations, false);
+    if (reduceAnimations) {
+        setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+
+        QString windowState = ConfigStore::instance()->get<QString>(
+            ConfigKeys::StartupWindowState, "normal");
+        bool shouldMaximize = (windowState == "maximized");
+
+        setMinimumSize(900, 600);
+#if !defined(Q_OS_MACOS) && !defined(Q_OS_MAC)
+        if (auto* minBtn = findChild<QWidget*>("min-button")) minBtn->show();
+        if (auto* maxBtn = findChild<QWidget*>("max-button")) maxBtn->show();
+#endif
+
+        m_viewStack->setCurrentWidget(m_homeView);
+
+        if (shouldMaximize) {
+            showMaximized();
+        } else {
+            QRect screenGeo = screen()->availableGeometry();
+            int w = 1280, h = 800;
+            setGeometry(
+                screenGeo.x() + (screenGeo.width() - w) / 2,
+                screenGeo.y() + (screenGeo.height() - h) / 2,
+                w, h);
+        }
+        return;
+    }
+
+    
+    auto *loginOpacity = new QGraphicsOpacityEffect(m_loginView);
+    loginOpacity->setOpacity(1.0);
+    m_loginView->setGraphicsEffect(loginOpacity);
+
+    auto *fadeOut = new QPropertyAnimation(loginOpacity, "opacity", this);
+    fadeOut->setDuration(120);
+    fadeOut->setStartValue(1.0);
+    fadeOut->setEndValue(0.0);
+
+    connect(fadeOut, &QPropertyAnimation::finished, this, [this]() {
+        
+        setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+
+        
+        QString windowState = ConfigStore::instance()->get<QString>(
+            ConfigKeys::StartupWindowState, "normal");
+        bool shouldMaximize = (windowState == "maximized");
+
+        QRect startGeo = this->geometry();
+        QRect targetGeo;
+        if (shouldMaximize) {
+            
+            targetGeo = screen()->availableGeometry();
+        } else {
+            
+            int targetWidth = 1280;
+            int targetHeight = 800;
+            targetGeo = QRect(
+                startGeo.x() - (targetWidth - startGeo.width()) / 2,
+                startGeo.y() - (targetHeight - startGeo.height()) / 2,
+                targetWidth, targetHeight);
+
+            
+            
+            QRect screenGeo = screen()->availableGeometry();
+            if (targetGeo.left() < screenGeo.left())
+                targetGeo.moveLeft(screenGeo.left());
+            if (targetGeo.top() < screenGeo.top())
+                targetGeo.moveTop(screenGeo.top());
+            if (targetGeo.right() > screenGeo.right())
+                targetGeo.moveRight(screenGeo.right());
+            if (targetGeo.bottom() > screenGeo.bottom())
+                targetGeo.moveBottom(screenGeo.bottom());
+        }
+
+        auto *geoAnim = new QPropertyAnimation(this, "geometry", this);
+        
+        geoAnim->setDuration(shouldMaximize ? 500 : 350);
+        geoAnim->setStartValue(startGeo);
+        geoAnim->setEndValue(targetGeo);
+        geoAnim->setEasingCurve(QEasingCurve::InOutCubic);
+
+        connect(geoAnim, &QPropertyAnimation::finished, this, [this, shouldMaximize]() {
+            
+            setMinimumSize(900, 600);
+            
+#if !defined(Q_OS_MACOS) && !defined(Q_OS_MAC)
+            if (auto* minBtn = findChild<QWidget*>("min-button")) minBtn->show();
+            if (auto* maxBtn = findChild<QWidget*>("max-button")) maxBtn->show();
+#endif
+
+            
+            m_loginView->setGraphicsEffect(nullptr);
+
+            
+            if (shouldMaximize) {
+                showMaximized();
+            }
+
+            
+            auto *homeOpacity = new QGraphicsOpacityEffect(m_homeView);
+            homeOpacity->setOpacity(0.0);
+            m_homeView->setGraphicsEffect(homeOpacity);
+
+            
+            m_viewStack->setCurrentWidget(m_homeView);
+
+            auto *fadeIn = new QPropertyAnimation(homeOpacity, "opacity", this);
+            fadeIn->setDuration(250);
+            fadeIn->setStartValue(0.0);
+            fadeIn->setEndValue(1.0);
+            fadeIn->setEasingCurve(QEasingCurve::OutQuad);
+
+            connect(fadeIn, &QPropertyAnimation::finished, this, [this]() {
+                m_homeView->setGraphicsEffect(nullptr); 
+            });
+            fadeIn->start(QAbstractAnimation::DeleteWhenStopped);
+        });
+        geoAnim->start(QAbstractAnimation::DeleteWhenStopped);
+    });
+    fadeOut->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+void MainWindow::navigateToLogin() {
+    
+    
+    m_homeView->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+
+    
+    bool reduceAnimations = ConfigStore::instance()->get<bool>(ConfigKeys::UiAnimations, false);
+    if (reduceAnimations) {
+#if !defined(Q_OS_MACOS) && !defined(Q_OS_MAC)
+        if (auto* m = findChild<QWidget*>("min-button")) m->hide();
+        if (auto* x = findChild<QWidget*>("max-button")) x->hide();
+#endif
+
+        if (isMaximized()) showNormal();
+
+        setMinimumSize(0, 0);
+        setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+
+        m_viewStack->setCurrentWidget(m_loginView);
+        resize(m_defaultWidth, m_defaultHeight);
+
+        
+        QRect screenGeo = screen()->availableGeometry();
+        move(screenGeo.x() + (screenGeo.width() - m_defaultWidth) / 2,
+             screenGeo.y() + (screenGeo.height() - m_defaultHeight) / 2);
+
+        m_core->authService()->logout();
+        return;
+    }
+
+    
+    auto *homeOpacity = new QGraphicsOpacityEffect(m_homeView);
+    homeOpacity->setOpacity(1.0);
+    m_homeView->setGraphicsEffect(homeOpacity);
+    
+    auto *fadeOut = new QPropertyAnimation(homeOpacity, "opacity", this);
+    fadeOut->setDuration(120);
+    fadeOut->setStartValue(1.0);
+    fadeOut->setEndValue(0.0);
+
+    connect(fadeOut, &QPropertyAnimation::finished, this, [this]() {
+        
+#if !defined(Q_OS_MACOS) && !defined(Q_OS_MAC)
+        if (auto* m = findChild<QWidget*>("min-button")) m->hide();
+        if (auto* x = findChild<QWidget*>("max-button")) x->hide();
+#endif
+
+        
+        if (isMaximized()) {
+            QRect maxGeo = geometry(); 
+            showNormal();
+            setGeometry(maxGeo);       
+        }
+
+        
+        setMinimumSize(0, 0); 
+        setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+        
+        QRect startGeo = geometry();
+        int targetWidth = m_defaultWidth;
+        int targetHeight = m_defaultHeight;
+        
+        
+        QRect targetGeo(startGeo.x() + (startGeo.width() - targetWidth) / 2,
+                        startGeo.y() + (startGeo.height() - targetHeight) / 2,
+                        targetWidth, targetHeight);
+
+        auto *geoAnim = new QPropertyAnimation(this, "geometry", this);
+        
+        geoAnim->setDuration(startGeo.width() > 1300 ? 500 : 350);
+        geoAnim->setStartValue(startGeo);
+        geoAnim->setEndValue(targetGeo);
+        geoAnim->setEasingCurve(QEasingCurve::InOutCubic);
+
+        connect(geoAnim, &QPropertyAnimation::finished, this, [this]() {
+            
+            
+            
+            m_homeView->setGraphicsEffect(nullptr);
+            
+            
+            auto *loginOpacity = new QGraphicsOpacityEffect(m_loginView);
+            loginOpacity->setOpacity(0.0);
+            m_loginView->setGraphicsEffect(loginOpacity);
+            
+            m_viewStack->setCurrentWidget(m_loginView);
+
+            auto *fadeIn = new QPropertyAnimation(loginOpacity, "opacity", this);
+            fadeIn->setDuration(250);
+            fadeIn->setStartValue(0.0);
+            fadeIn->setEndValue(1.0);
+            fadeIn->setEasingCurve(QEasingCurve::OutQuad);
+
+            connect(fadeIn, &QPropertyAnimation::finished, this, [this]() {
+                m_loginView->setGraphicsEffect(nullptr);
+                
+                
+                m_core->authService()->logout();
+            });
+            fadeIn->start(QAbstractAnimation::DeleteWhenStopped);
+        });
+        geoAnim->start(QAbstractAnimation::DeleteWhenStopped);
+    });
+    fadeOut->start(QAbstractAnimation::DeleteWhenStopped);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == qApp && event->type() == QEvent::ApplicationStateChange) {
+        if (QGuiApplication::applicationState() != Qt::ApplicationActive) {
+            hideGlobalSearchTransientUi();
+        }
+    }
+
+    if (watched == this) {
+        if (event->type() == QEvent::WindowDeactivate ||
+            event->type() == QEvent::Move ||
+            event->type() == QEvent::Resize ||
+            event->type() == QEvent::Hide ||
+            event->type() == QEvent::Close ||
+            event->type() == QEvent::WindowStateChange) {
+            // WindowDeactivate 特例：打开 Qt::Popup 子窗口会让主窗口
+            // 失活，若此刻 popup 可见，这正是 popup 自己激活导致的——
+            // 立即 dismiss 会形成「弹出→失活→关闭→焦点还原→再弹出」
+            // 的振荡。popup 自身原生处理外部点击/应用切换，此处跳过。
+            const bool popupSelfActivation =
+                event->type() == QEvent::WindowDeactivate &&
+                m_globalSearchHistoryPopup && m_globalSearchHistoryPopup->isVisible();
+            if (!popupSelfActivation) {
+                hideGlobalSearchTransientUi();
+            } else if (m_globalSearchCompleter && m_globalSearchCompleter->popup()) {
+                m_globalSearchCompleter->popup()->hide();
+            }
+        }
+    }
+
+    if (watched == m_globalSearchHistoryPopup && m_globalSearchHistoryPopup) {
+        if (event->type() == QEvent::WindowDeactivate ||
+            event->type() == QEvent::Hide ||
+            event->type() == QEvent::Close) {
+            hideGlobalSearchTransientUi();
+        }
+    }
+
+    if (watched == m_globalSearchBox && m_globalSearchBox) {
+        // 注意：不处理 FocusIn——Qt::Popup 关闭时会把焦点还给输入框并触发
+        // FocusIn（reason 非 MouseFocusReason，原 guard 挡不住），若在此重新
+        // 弹出会形成 show/close 振荡（下拉一直闪）。打开途径：点击、↓ 键。
+        // 点击必弹（不要求空文本）：选过历史后框内残留文字也应能再次打开。
+        if (event->type() == QEvent::MouseButtonPress) {
+            QTimer::singleShot(0, this, [this]() {
+                // 点击 → 展示全量历史（不过滤前缀）；↓ 键 → 按文本过滤。
+                showGlobalSearchHistoryPopup();
+            });
+        } else if (event->type() == QEvent::KeyPress) {
+            auto *keyEvent = static_cast<QKeyEvent *>(event);
+            if (keyEvent->key() == Qt::Key_Down) {
+                showGlobalSearchHistoryPopup(m_globalSearchBox->text());
+                return true;
+            }
+            // popup 不激活窗口（WA_ShowWithoutActivating）后，Esc 不再被
+            // Qt::Popup 原生消费，这里负责用 Esc 关闭历史下拉。
+            if (keyEvent->key() == Qt::Key_Escape && m_globalSearchHistoryPopup &&
+                m_globalSearchHistoryPopup->isVisible()) {
+                hideGlobalSearchTransientUi();
+                return true;
+            }
+        } else if (event->type() == QEvent::Hide) {
+            hideGlobalSearchTransientUi();
+        }
+    }
+
+    if ((event->type() == QEvent::MouseButtonPress ||
+         event->type() == QEvent::MouseButtonDblClick) &&
+        m_globalSearchHistoryPopup && m_globalSearchHistoryPopup->isVisible() &&
+        m_globalSearchBox) {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        const QPoint globalPos = mouseEvent->globalPosition().toPoint();
+        const QRect popupRect(m_globalSearchHistoryPopup->mapToGlobal(QPoint(0, 0)),
+                              m_globalSearchHistoryPopup->size());
+        const QRect searchRect(m_globalSearchBox->mapToGlobal(QPoint(0, 0)),
+                               m_globalSearchBox->size());
+        if (!popupRect.contains(globalPos) && !searchRect.contains(globalPos)) {
+            hideGlobalSearchTransientUi();
+        }
+    }
+
+    
+    if (event->type() == QEvent::MouseButtonRelease) {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::BackButton || mouseEvent->button() == Qt::XButton1) {
+            
+            
+            if (auto *modal = QApplication::activeModalWidget()) {
+                if (auto *dlg = qobject_cast<QDialog *>(modal)) {
+                    dlg->reject();
+                }
+                return true;
+            }
+            auto back = findChild<QWK::WindowButton*>("back-button");
+            
+            if (back && back->isVisible()) {
+                back->click(); 
+                return true;   
+            }
+        }
+    } else if (event->type() == QEvent::MouseButtonPress || event->type() == QEvent::MouseButtonDblClick) {
+        auto *mouseEvent = static_cast<QMouseEvent *>(event);
+        if (mouseEvent->button() == Qt::BackButton || mouseEvent->button() == Qt::XButton1) {
+            auto back = findChild<QWK::WindowButton*>("back-button");
+            if (back && back->isVisible()) {
+                return true; 
+            }
+        }
+    }
+
+    if (ContextMenuUtils::showStyledTextContextMenu(watched, event)) {
+        return true;
+    }
+    if (ContextMenuUtils::showStyledLabelContextMenu(watched, event)) {
+        return true;
+    }
+
+    return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    hideGlobalSearchTransientUi();
+
+    
+    bool useTray = ConfigStore::instance()->get<bool>(ConfigKeys::CloseToTray, false);
+
+    
+    if (!m_realQuit && useTray && QSystemTrayIcon::isSystemTrayAvailable()) {
+        
+        m_hadPlayerWhenHiddenToTray = false;
+        m_wasPausedByTray = false;
+        if (auto *player = m_homeView->activePlayerView()) {
+            m_hadPlayerWhenHiddenToTray = true;
+            if (player->isMediaPlaying()) {
+                player->pausePlayback();
+                m_wasPausedByTray = true;
+            }
+        }
+
+        hide();             
+        event->ignore();    
+    } else {
+        
+        if (auto *player = m_homeView->activePlayerView()) {
+            player->stopAndReport();
+            
+            QElapsedTimer wait;
+            wait.start();
+            while (wait.elapsed() < 500) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+            }
+        }
+        event->accept();    
+    }
+}

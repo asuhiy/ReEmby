@@ -1,0 +1,128 @@
+#ifndef LOGINVIEW_H
+#define LOGINVIEW_H
+
+#include <QWidget>
+#include <optional>
+#include <qcorotask.h>
+#include "../../managers/thememanager.h"
+#include "models/profile/proxyconfig.h"
+
+class QLineEdit;
+class QPushButton;
+class QLabel;
+class QStackedWidget;
+class QVBoxLayout;
+class QEmbyCore;
+class QResizeEvent;
+class QAction; 
+class QUrl;
+
+
+class LoadingOverlay;
+class ModernComboBox;
+class ModernSwitch;
+class ServerWheelView;
+class WebdavProfileStore;
+
+class LoginView : public QWidget
+{
+    Q_OBJECT
+public:
+    explicit LoginView(QEmbyCore* core, QWidget *parent = nullptr);
+
+Q_SIGNALS:
+    void loginCompleted();
+
+protected:
+    void showEvent(QShowEvent *event) override;
+    
+    void resizeEvent(QResizeEvent *event) override;
+
+private Q_SLOTS:
+
+    QCoro::Task<void> onLoginClicked();
+    QCoro::Task<void> onTestConnectionClicked();
+    QCoro::Task<void> onServerCardClicked(const QString& serverId);
+
+    void showAddPage();
+    void showListPage();
+    void onRemoveServerClicked(const QString& serverId);
+    void onEditServerClicked(const QString& serverId);
+
+    
+    void onCloudSyncClicked();
+
+    
+    void onThemeChanged(ThemeManager::Theme theme);
+
+private:
+    void updateSslOptionsVisibility();
+    void syncProtocolSelectionFromUrlText(const QString& text);
+    QUrl buildNormalizedServerUrl(QString* errorMessage) const;
+    void applyServerUrlToForm(const QUrl& url, bool ignoreSslVerification);
+    QString displayServerAddress(const QUrl& url) const;
+    // 共享校验: 地址非空 + 用户名非空 + 解析 normalized URL.
+    // 用于 onLoginClicked 和 onTestConnectionClicked 复用, 失败填 errorMessage.
+    std::optional<QUrl> validateServerUrl(QString* errorMessage) const;
+
+    QEmbyCore* m_core;
+
+    QStackedWidget* m_pageSwitcher;
+
+    QWidget* m_listPage;
+    QWidget* m_addPage;
+
+    
+    ServerWheelView* m_wheelView;
+
+    ModernComboBox* m_protocolInput;
+    QLineEdit* m_serverAddressInput;
+    QLineEdit* m_portInput = nullptr;
+    QWidget* m_sslOptionsRow = nullptr;
+    ModernSwitch* m_ignoreSslSwitch = nullptr;
+
+    QLineEdit* m_usernameInput;
+    QLineEdit* m_passwordInput;
+    QLineEdit* m_userAgentInput = nullptr;
+    QPushButton* m_loginButton;
+    QPushButton* m_testConnButton;
+    QLabel* m_testResultLabel;
+    QLabel* m_errorLabel;
+    
+    
+    QAction* m_togglePwdAction = nullptr;
+
+    QString m_editingServerId;
+    
+    
+    LoadingOverlay* m_loadingOverlay = nullptr;
+
+    bool m_autoLoginAttempted = false;
+
+    
+    
+    QPushButton* m_serverProxyBtn = nullptr;
+
+    
+    QPushButton* m_cloudSyncBtn = nullptr;
+
+    
+    WebdavProfileStore* m_webdavStore = nullptr;
+
+    
+    
+    ProxyConfig m_pendingProxy;
+    bool        m_pendingUseGlobalProxy = false;
+
+    void setupUi();
+    void setupListPage();
+    void setupAddPage();
+    void refreshServerList();
+    void refreshServerProxyTooltip();
+    void openProxyDialogForCurrentEntry();
+    
+    
+    QString getThemeSvgPath(const QString& iconName) const;
+};
+
+#endif 

@@ -1,0 +1,413 @@
+#include "mediagridwidget.h"
+#include "shimmerwidget.h"
+#include "../utils/smoothscrollcontroller.h"
+#include "../utils/textwraputils.h"
+#include "../views/media/medialistmodel.h"
+#include <QVBoxLayout>
+#include <QListView>
+#include <QResizeEvent>
+#include <QApplication>
+#include <QStyle>
+#include <QScroller>
+#include <QScrollerProperties>
+#include <QWheelEvent>
+#include <QScrollBar>
+#include <QSet>
+#include <QStyleOptionViewItem>
+#include <algorithm>
+
+MediaGridWidget::MediaGridWidget(QEmbyCore* core, QWidget* parent)
+    : QWidget(parent), m_core(core), m_basePadding(20), m_currentStyle(MediaCardDelegate::Poster),
+    m_vScrollController(nullptr)
+{
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(0, 0, 0, 0);
+
+    m_listView = new QListView(this);
+    m_listView->setSelectionMode(QAbstractItemView::NoSelection);
+    m_listView->setViewMode(QListView::IconMode);
+    m_listView->setResizeMode(QListView::Adjust);
+    m_listView->setMovement(QListView::Static);
+    m_listView->setSpacing(0);
+    m_listView->setUniformItemSizes(true);
+    m_listView->setWrapping(true);
+    m_listView->setFrameShape(QFrame::NoFrame);
+    m_listView->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_listView->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    m_listView->setMouseTracking(true);
+    
+    
+    m_listView->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    m_listView->viewport()->setAttribute(Qt::WA_Hover);
+
+    
+    
+    
+    
+    m_listView->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
+
+    
+    QScroller::grabGesture(m_listView->viewport(), QScroller::LeftMouseButtonGesture);
+    QScroller* scroller = QScroller::scroller(m_listView->viewport());
+    QScrollerProperties props = scroller->scrollerProperties();
+    
+    props.setScrollMetric(QScrollerProperties::VerticalOvershootPolicy, QScrollerProperties::OvershootAlwaysOff);
+    props.setScrollMetric(QScrollerProperties::HorizontalOvershootPolicy, QScrollerProperties::OvershootAlwaysOff);
+    
+    props.setScrollMetric(QScrollerProperties::DragStartDistance, 0.001);
+    scroller->setScrollerProperties(props);
+
+    m_vScrollController =
+        new SmoothScrollController(m_listView->verticalScrollBar(), this);
+    m_vScrollController->setDuration(160);
+
+    
+    m_listView->viewport()->installEventFilter(this);
+
+    m_listModel = new MediaListModel(400, m_core, this);
+    m_listDelegate = new MediaCardDelegate(m_currentStyle, this);
+
+    m_listView->setModel(m_listModel);
+    m_listView->setItemDelegate(m_listDelegate);
+    layout->addWidget(m_listView);
+
+    
+    m_shimmer = new ShimmerWidget(this);
+    m_shimmer->hide();
+
+    connect(m_listView, &QListView::clicked, this, [this](const QModelIndex& index) {
+        Q_EMIT itemClicked(m_listModel->getItem(index));
+    });
+    connect(m_listView->verticalScrollBar(), &QScrollBar::valueChanged, this,
+            [this](int) {
+                notifyLoadMoreIfNeeded();
+                updateVisibleImagePriority();
+            });
+
+    
+    
+    
+    connect(m_listDelegate, &MediaCardDelegate::playRequested, this, &MediaGridWidget::playRequested);
+    connect(m_listDelegate, &MediaCardDelegate::favoriteRequested, this, &MediaGridWidget::favoriteRequested);
+    connect(m_listDelegate, &MediaCardDelegate::moreMenuRequested, this, &MediaGridWidget::moreMenuRequested);
+    
+}
+
+void MediaGridWidget::setBasePadding(int padding) {
+    m_basePadding = padding;
+    adjustGrid();
+}
+
+void MediaGridWidget::setCardStyle(MediaCardDelegate::CardStyle style) {
+    if (m_currentStyle == style) return;
+    m_currentStyle = style;
+
+    
+    m_listDelegate->setStyle(style);
+    const bool preferThumb =
+        style == MediaCardDelegate::LibraryTile ||
+        style == MediaCardDelegate::EpisodeList;
+    m_listModel->setPreferThumb(preferThumb);
+    m_listModel->clearImageCache();
+
+    
+    if (style == MediaCardDelegate::EpisodeList) {
+        m_listView->setViewMode(QListView::ListMode);
+        m_listView->setFlow(QListView::TopToBottom);
+        m_listView->setWrapping(false);
+        m_listView->setSpacing(5); 
+    } else {
+        m_listView->setViewMode(QListView::IconMode);
+        m_listView->setFlow(QListView::LeftToRight);
+        m_listView->setWrapping(true);
+        m_listView->setSpacing(0);
+    }
+
+    adjustGrid();
+    updateVisibleImagePriority();
+}
+
+void MediaGridWidget::setLoading(bool loading)
+{
+    if (!m_shimmer) {
+        return;
+    }
+
+    if (loading) {
+        
+        QStyleOptionViewItem opt;
+        const QSize cardSize = m_listDelegate->sizeHint(opt, QModelIndex());
+        m_shimmer->setCardSize(cardSize);
+        m_shimmer->setShowSubtitle(false);
+        m_shimmer->setGeometry(m_listView->geometry());
+        m_shimmer->raise();
+        m_shimmer->show();
+        m_shimmer->startAnimation();
+    } else {
+        m_shimmer->stopAnimation();
+        m_shimmer->hide();
+    }
+}
+
+void MediaGridWidget::setItems(const QList<MediaItem>& items) {
+    m_listModel->setItems(items);
+    adjustGrid();
+    
+    
+    if (m_shimmer && !items.isEmpty()) {
+        m_shimmer->stopAnimation();
+        m_shimmer->hide();
+    }
+    if (!items.isEmpty()) {
+        QMetaObject::invokeMethod(
+            this,
+            [this]() {
+                notifyLoadMoreIfNeeded();
+                updateVisibleImagePriority();
+            },
+            Qt::QueuedConnection);
+    }
+}
+
+
+
+
+void MediaGridWidget::updateItem(const MediaItem& item) {
+    if (m_listModel) {
+        m_listModel->updateItem(item);
+    }
+}
+
+void MediaGridWidget::prependOrUpdateItem(const MediaItem& item, int maxItems) {
+    if (m_listModel) {
+        m_listModel->prependOrUpdateItem(item, maxItems);
+        QMetaObject::invokeMethod(
+            this,
+            [this]() {
+                notifyLoadMoreIfNeeded();
+                updateVisibleImagePriority();
+            },
+            Qt::QueuedConnection);
+    }
+}
+
+
+void MediaGridWidget::removeItem(const QString& itemId) {
+    if (m_listModel) {
+        m_listModel->removeItem(itemId);
+    }
+}
+
+
+int MediaGridWidget::itemCount() const {
+    return m_listModel ? m_listModel->rowCount() : 0;
+}
+
+
+int MediaGridWidget::saveScrollPosition() const {
+    if (m_listView && m_listView->verticalScrollBar())
+        return m_listView->verticalScrollBar()->value();
+    return 0;
+}
+
+
+void MediaGridWidget::restoreScrollPosition(int pos) {
+    if (m_listView && m_listView->verticalScrollBar()) {
+        if (m_vScrollController) {
+            m_vScrollController->scrollTo(pos, false);
+        } else {
+            m_listView->verticalScrollBar()->setValue(pos);
+        }
+    }
+}
+
+void MediaGridWidget::resizeEvent(QResizeEvent *event) {
+    QWidget::resizeEvent(event);
+    adjustGrid();
+    
+    if (m_shimmer && m_shimmer->isVisible()) {
+        m_shimmer->setGeometry(m_listView->geometry());
+    }
+    notifyLoadMoreIfNeeded();
+    updateVisibleImagePriority();
+}
+
+bool MediaGridWidget::eventFilter(QObject* obj, QEvent* event) {
+    if (obj == m_listView->viewport() && event->type() == QEvent::ToolTip) {
+        return TextWrapUtils::showWrappedMediaItemToolTip(m_listView, event);
+    }
+
+    
+    if (event->type() == QEvent::Wheel && obj == m_listView->viewport()) {
+        QWheelEvent* we = static_cast<QWheelEvent*>(event);
+        if (qAbs(we->angleDelta().y()) >= qAbs(we->angleDelta().x())) {
+            if (m_vScrollController) {
+                m_vScrollController->scrollByWheelEvent(we, Qt::Vertical);
+            }
+            return true;
+        }
+    }
+    return QWidget::eventFilter(obj, event);
+}
+
+void MediaGridWidget::notifyLoadMoreIfNeeded()
+{
+    if (!m_listView || !m_listModel || m_listModel->rowCount() <= 0) {
+        return;
+    }
+
+    QScrollBar* vBar = m_listView->verticalScrollBar();
+    if (!vBar) {
+        return;
+    }
+
+    constexpr int kLoadMoreThreshold = 160;
+    const int remaining = vBar->maximum() - vBar->value();
+    if (vBar->maximum() <= 0 || remaining <= kLoadMoreThreshold) {
+        Q_EMIT loadMoreRequested();
+    }
+}
+
+void MediaGridWidget::updateVisibleImagePriority()
+{
+    if (!m_listView || !m_listModel) {
+        return;
+    }
+
+    if (!isVisible() || visibleRegion().isEmpty()) {
+        m_listModel->setPriorityRows({});
+        return;
+    }
+
+    QWidget* viewport = m_listView->viewport();
+    if (!viewport) {
+        return;
+    }
+
+    QStyleOptionViewItem option;
+    const QSize cellSize = m_listDelegate->sizeHint(option, QModelIndex());
+    const int stepX = qMax(1, cellSize.width() / 2);
+    const int stepY = qMax(1, cellSize.height() / 2);
+
+    QSet<int> rowSet;
+    const QRect rect = viewport->rect();
+    for (int y = rect.top(); y <= rect.bottom(); y += stepY) {
+        for (int x = rect.left(); x <= rect.right(); x += stepX) {
+            const QModelIndex idx = m_listView->indexAt(QPoint(x, y));
+            if (idx.isValid()) {
+                rowSet.insert(idx.row());
+            }
+        }
+    }
+
+    QList<int> rows = rowSet.values();
+    std::sort(rows.begin(), rows.end());
+    m_listModel->setPriorityRows(rows);
+}
+
+void MediaGridWidget::adjustGrid() {
+    if (!m_listView || !m_listModel) return;
+
+    int scrollBarWidth = qApp->style()->pixelMetric(QStyle::PM_ScrollBarExtent);
+    int availableWidth = this->width() - scrollBarWidth;
+    if (availableWidth < 100) availableWidth = 100;
+
+    
+    if (m_currentStyle == MediaCardDelegate::EpisodeList) {
+        int padding = m_basePadding;
+        
+        
+        
+        
+        m_listView->setStyleSheet(QString("QListView { background: transparent; border: none; outline: none; padding-left: %1px; padding-right: 0px; }").arg(padding));
+        
+        
+        
+        
+        int cellWidth = availableWidth - padding - padding; 
+        if (cellWidth < 100) cellWidth = 100;
+        
+        m_listDelegate->setTileSize(QSize(cellWidth, 160));
+        const int requestWidth = qBound(
+            160, qRound(250 * devicePixelRatioF()), 768);
+        m_listModel->setImageMaxWidth(requestWidth);
+    } else {
+        availableWidth -= (m_basePadding * 2);
+        int defaultCellWidth = 150;
+        if (m_currentStyle == MediaCardDelegate::LibraryTile) {
+            defaultCellWidth = 250; 
+        } else if (m_currentStyle == MediaCardDelegate::Cast) {
+            defaultCellWidth = 140; 
+        }
+
+        int tolerance = 5;
+        int cols = (availableWidth + tolerance) / defaultCellWidth;
+        if (cols < 1) cols = 1;
+
+        int cellWidth = availableWidth / cols;
+        int remainder = availableWidth - (cols * cellWidth);
+        int leftPad = m_basePadding + remainder / 2;
+
+        m_listView->setStyleSheet(QString("QListView { background: transparent; border: none; outline: none; padding-left: %1px; padding-right: 0px; }").arg(leftPad));
+
+        int imgWidth = cellWidth - 16;
+        int imgHeight = imgWidth;
+
+        if (m_currentStyle == MediaCardDelegate::Poster || m_currentStyle == MediaCardDelegate::Cast) {
+            imgHeight = qRound(imgWidth * 1.5);        
+        } else if (m_currentStyle == MediaCardDelegate::LibraryTile) {
+            imgHeight = qRound(imgWidth * 9.0 / 16.0); 
+        }
+
+        int cellHeight = imgHeight + 60;
+        m_listDelegate->setTileSize(QSize(cellWidth, cellHeight));
+        const int requestWidth = qBound(
+            160, qRound(imgWidth * devicePixelRatioF()), 768);
+        m_listModel->setImageMaxWidth(requestWidth);
+    }
+    
+    m_listView->doItemsLayout();
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

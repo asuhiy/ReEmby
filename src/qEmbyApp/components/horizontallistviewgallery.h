@@ -1,0 +1,115 @@
+#ifndef HORIZONTALLISTVIEWGALLERY_H
+#define HORIZONTALLISTVIEWGALLERY_H
+
+#include <QWidget>
+#include <QPoint>
+#include <QList>
+#include <QSize>
+#include <models/media/mediaitem.h>
+
+class ShimmerWidget;
+#include "../views/media/mediacarddelegate.h"
+
+class QEmbyCore;
+class QListView;
+class QPushButton;
+class QPropertyAnimation;
+class MediaListModel; 
+
+class HorizontalListViewGallery : public QWidget
+{
+    Q_OBJECT
+public:
+    
+    explicit HorizontalListViewGallery(QEmbyCore* core, QWidget* parent = nullptr);
+    ~HorizontalListViewGallery() override;
+
+    
+    QListView* listView() const { return m_listView; }
+
+    
+    void setItems(const QList<MediaItem>& items);
+    void updateItem(const MediaItem& item);
+    void prependOrUpdateItem(const MediaItem& item, int maxItems = 0);
+    
+    
+    void removeItem(const QString& itemId);
+    int itemCount() const;
+    QList<MediaItem> items() const;
+    void clearImageCache();
+    void setForceNetworkImages(bool forceNetwork);
+    
+    
+    void clearFailedImageItems();
+
+    
+    void setCardStyle(MediaCardDelegate::CardStyle style);
+
+    
+    void setTileSize(const QSize &size);
+    void setTextPixelSizes(int titlePx, int subTitlePx);
+    void setContentPadding(int padding);
+    void setHoverControls(MediaCardDelegate::HoverControls controls);
+    void scrollToItemId(const QString &itemId);
+
+    // 按卡片步数滚动（正=右，负=左；每步 2 张卡片，供 section header
+    // 常驻左右箭头调用）。
+    void scrollByCardSteps(int steps);
+
+    // 常驻箭头模式（聚合视图用）：左右箭头始终显示（按滚动位置显示/
+    // 隐藏），不依赖鼠标 hover；dashboard 等保持原 hover 行为。
+    void setPersistentArrows(bool persistent);
+
+    
+    void setHighlightedItemId(const QString &id);
+
+    
+    void setLoading(bool loading);
+
+    
+    QSize minimumSizeHint() const override {
+        return QSize(1, QWidget::minimumSizeHint().height());
+    }
+
+Q_SIGNALS:
+    
+    void itemClicked(const MediaItem& item);
+    void playRequested(const MediaItem& item);
+    void favoriteRequested(const MediaItem& item);
+    void moreMenuRequested(const MediaItem& item, const QPoint& globalPos);
+
+protected:
+    void resizeEvent(QResizeEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+    void showEvent(QShowEvent* event) override;
+    bool eventFilter(QObject* obj, QEvent* event) override;
+
+private:
+    void updateButtonsVisibility();
+    void updateButtonPositions();
+    void updateVisibleImagePriority();
+    void updateImageRequestSize();
+
+    QEmbyCore* m_core;
+    QListView* m_listView;
+    QPushButton* m_btnLeft;
+    QPushButton* m_btnRight;
+
+    
+    MediaListModel* m_listModel;
+    MediaCardDelegate* m_listDelegate;
+
+    
+    QPropertyAnimation* m_hScrollAnim;
+    int m_hScrollTarget;
+
+    
+    MediaCardDelegate::CardStyle m_cardStyle;
+
+    
+    ShimmerWidget* m_shimmer = nullptr;
+    bool m_imageRequestsSuspendedForVisibility = false;
+    bool m_persistentArrows = false;
+};
+
+#endif 

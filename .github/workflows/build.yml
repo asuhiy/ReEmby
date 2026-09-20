@@ -1,0 +1,277 @@
+# =============================================================================
+# ReEmby CI 构建 workflow（本地重建版）
+#
+# 前置条件（缺一不可，均为仓库外因素）：
+#   1. 本仓库需包含 cmake/ReEmbyPlatformDeps.cmake 与 cmake/ReEmbyPackaging.cmake
+#      （上游缺失，已本地重建，必须随本文件一起提交）
+#   2. Windows: libmpv SDK 由 CI 从 shinchiro/mpv-winbuild-cmake releases 下载，
+#      布局对齐 README 要求的 libs/libmpv/{bin,include,lib}
+#   3. macOS: libmpv 用 brew 版（qEmbyApp/CMakeLists.txt 明确支持系统 libmpv）
+# =============================================================================
+
+name: Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    # 推 v* tag 触发正式版发布（如 v0.0.7），与主分支 push 的 continuous 滚动发布并存
+    tags: ['v*']
+  # 网页端 Draft/publish 一个 Release 也触发构建，产物自动挂到该 Release（OpenList 上游模式）
+  release:
+    types: [published]
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write # 创建/更新 Releases 必需
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.*'
+          arch: win64_msvc2022_64
+          # qtwebengine: Trakt 授权内嵌浏览器（体积大，构建/产物体积会涨）
+          # qtwebchannel/qtpositioning: WebEngine 的安装器不自动装的隐式依赖
+          # （QTBUG-132539），缺了 configure 阶段直接失败
+          modules: 'qtwebsockets qtwebchannel qtpositioning qtwebengine'
+          cache: true
+
+      # sccache: cross-build compiler cache backed by the GitHub Actions
+      # cache service. Unchanged translation units are served from cache
+      # instead of being recompiled, so incremental pushes only pay for
+      # the files they touched + linking.
+      - name: Install sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Setup libmpv SDK (shinchiro build)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euxo pipefail
+          mkdir -p /tmp/mpv-main /tmp/mpv-dev libs/libmpv/bin libs/libmpv/lib
+          # pattern 限定 '2*' 开头（日期 2026xx），排除 x86-64-v3 指令集变体包
+          gh release download --repo shinchiro/mpv-winbuild-cmake \
+            --pattern 'mpv-x86_64-2*.7z' --dir /tmp/mpv-main --clobber
+          gh release download --repo shinchiro/mpv-winbuild-cmake \
+            --pattern 'mpv-dev-x86_64-2*.7z' --dir /tmp/mpv-dev --clobber
+          7z x -y /tmp/mpv-main/*.7z -o/tmp/mpv-main/x >/dev/null
+          7z x -y /tmp/mpv-dev/*.7z -o/tmp/mpv-dev/x >/dev/null
+          # 用 find 定位实际位置（不依赖包内目录布局假设）
+          MPV_DLL="$(find /tmp/mpv-main/x /tmp/mpv-dev/x -name 'libmpv-2.dll' | head -1)"
+          MPV_IMPLIB="$(find /tmp/mpv-dev/x \( -name 'libmpv.dll.a' -o -name 'mpv.dll.a' \) | head -1)"
+          MPV_CLIENT_H="$(find /tmp/mpv-dev/x -name 'client.h' -path '*mpv*' | head -1)"
+          MPV_INCLUDE="$(dirname "$(dirname "$MPV_CLIENT_H")")"
+          test -n "$MPV_DLL"
+          test -n "$MPV_IMPLIB"
+          test -n "$MPV_CLIENT_H"
+          cp "$MPV_DLL" libs/libmpv/bin/
+          cp -r "$MPV_INCLUDE" libs/libmpv/
+          cp "$MPV_IMPLIB" libs/libmpv/lib/
+          find libs/libmpv -maxdepth 3
+
+      - name: Configure
+        shell: bash
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: |
+          cmake -B build \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build (Release)
+        env:
+          SCCACHE_GHA_ENABLED: "true"
+        run: cmake --build build --config Release --parallel
+
+      # Hit-rate report: verify the cache actually pays off. Compiled
+      # requests vs cache hits should approach ~100% on incremental pushes.
+      - name: Show sccache stats
+        shell: bash
+        run: sccache --show-stats || true
+
+      # 输出目录由根 CMakeLists.txt:16 CMAKE_RUNTIME_OUTPUT_DIRECTORY 统一定为
+      # ${CMAKE_BINARY_DIR}/bin，VS 多配置生成器再追加 Release/ 子目录。
+      # POST_BUILD 已自动执行 windeployqt + 拷贝 libmpv-2.dll，
+      # build/bin/Release 即完整绿色包（exe + Qt DLL + 插件 + libmpv）。
+      # 注意：不使用 CPack——install() 只装 exe + 自家 DLL，Qt DLL 不进 install 树，
+      # CPack zip 无法独立运行。
+      # 精简部署目录：调试符号（PDB 单独留档）、WebEngine 未使用语言包、
+      # DevTools 前端资源、Qt 自带翻译（应用不加载此类 .qm，界面翻译编译在
+      # exe 内）都不进绿色包/安装包。
+      - name: Prune portable build
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p dist/symbols
+          cp build/bin/Release/*.pdb dist/symbols/ 2>/dev/null || true
+          rm -f build/bin/Release/*.pdb
+          rm -f build/bin/Release/resources/qtwebengine_devtools_resources.pak
+          find build/bin/Release/translations/qtwebengine_locales -name '*.pak' \
+            ! -name 'en-US.pak' ! -name 'zh-CN.pak' -delete
+          rm -f build/bin/Release/translations/qt_*.qm
+
+      # ===================== Releases 打包与发布 =====================
+      # 产物与上游对齐（仅 Win64）：
+      #   ReEmby-<ver>-win-x64.7z          绿色便携版（7z/LZMA2，解压即用）
+      #   ReEmby-<ver>-win-x64-Setup.exe   安装版（Inno Setup，runner 预装）
+      # 发布策略：continuous 滚动 Release——每次 push 成功后覆盖更新同名
+      # 资产，下载页始终是最新构建；版本号取自根 CMakeLists.txt project()。
+      # 打包时套一层**固定名**的顶层目录（ReEmby-win-x64，不含版本号）：
+      # 无论哪个版本，解压出来的目录名始终一致，新版本可直接覆盖旧目录，
+      # 放在程序目录下的 config/ 得以保留。版本号只留在压缩包文件名上。
+      - name: Package portable archive (7z)
+        shell: bash
+        run: |
+          set -euxo pipefail
+          VER="$(sed -n 's/^project(ReEmby VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt | head -1)"
+          test -n "$VER"
+          # dist/pack/ 是给 artifact 用的「隔离父目录」：upload-artifact 在 path
+          # 指向目录时会丢弃目录名本身、只上传内容，所以必须让父目录下只有
+          # ReEmby-win-x64/ 这一项，下载解压后才能得到同名目录。
+          rm -rf dist/pack
+          mkdir -p dist/pack/ReEmby-win-x64
+          cp -r build/bin/Release/* dist/pack/ReEmby-win-x64/
+          # 必须 cd 进目录再打包：7z 会原样保留传入路径，若写 ./dist/pack/ReEmby-win-x64
+          # 则压缩包内部会多出 dist/pack/ 两层。传裸目录名才能保证内部顶层恰好是
+          # ReEmby-win-x64/（原命令用通配符 Release/* 会丢掉路径，所以是散文件）。
+          ( cd dist/pack && 7z a -t7z -mx=9 "../ReEmby-${VER}-win-x64.7z" ReEmby-win-x64 )
+          # 把压缩包内的顶层目录名打印出来，便于在 CI 日志里核对该步骤的效果
+          echo "--- archive top-level entries ---"
+          7z l -ba "dist/ReEmby-${VER}-win-x64.7z" | awk 'NF {print $NF}' | sed 's|/.*||' | sort -u | head -5
+          echo "--- end ---"
+          echo "QEMBY_VERSION=${VER}" >> "$GITHUB_ENV"
+
+      # 上传「隔离父目录」dist/pack/，其下只有 ReEmby-win-x64/ 一项：
+      # 从 Actions 下载得到 ReEmby-<ver>-win-x64.zip，解压后直接就是
+      # ReEmby-win-x64/ 目录，无需二次解压、也不会只剩散文件。
+      - name: Upload portable build
+        uses: actions/upload-artifact@v5
+        with:
+          name: ReEmby-${{ env.QEMBY_VERSION }}-win-x64
+          path: dist/pack/
+          if-no-files-found: error
+
+      # 调试符号单独留档（不在绿色包里，崩溃分析时按需下载）。
+      - name: Upload debug symbols
+        uses: actions/upload-artifact@v5
+        with:
+          name: ReEmby-windows-x64-symbols
+          path: dist/symbols/*.pdb
+          if-no-files-found: warn
+
+      - name: Build installer (Inno Setup)
+        shell: bash
+        # MSYS2 会把以 /D 开头的参数当 POSIX 路径转换（如 /DAppVersion=0.0.7），
+        # 导致 ISCC 报 "You may not specify more than one script filename"。
+        env:
+          MSYS2_ARG_CONV_EXCL: "/D"
+          MSYS_NO_PATHCONV: "1"
+        run: |
+          set -euxo pipefail
+          ISCC="/c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          test -x "$ISCC"
+          "$ISCC" \
+            /DSrcDir="$(cygpath -w "$(pwd)/build/bin/Release")" \
+            /DOutDir="$(cygpath -w "$(pwd)/dist")" \
+            /DAppVersion="${QEMBY_VERSION}" \
+            packaging/windows/ReEmby.iss
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: ReEmby-windows-x64-Setup
+          path: dist/*-Setup.exe
+          if-no-files-found: error
+
+      # 注意：上游已从 softprops/action-ghrelease 改名为 action-gh-release（加连字符），
+      # 改名后 Actions 解析服务不重定向旧名，会报 repository not found。
+      # v2.6.2 为最终 v2（Node 20 已弃用），升级到 v3（Node 24）。
+      # 仅 v* tag / 网页手动 Publish Release 才发布到 Releases 页；
+      # 主分支普通 push 只出 Artifacts，不产生 Release。
+      # tag 版本号需与根 CMakeLists.txt 的 project(ReEmby VERSION x.y.z) 一致，
+      # 产物文件名中的版本号取自 CMakeLists。
+      - name: Release (versioned)
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "ReEmby ${{ github.ref_name }}"
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            dist/ReEmby-*-win-x64.7z
+            dist/ReEmby-*-win-x64-Setup.exe
+
+  # macOS 构建暂时禁用：macos-latest runner 曾卡 2h+ 不出结果（brew/dylibbundler
+  # 慢 + arm64 runner 排队）。恢复方法：删除下行 `if: false`。
+  build-macos:
+    if: false # disabled: runner hangs for hours; Windows-only for now
+    runs-on: macos-latest # arm64 runner
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.9.*'
+          modules: 'qtwebsockets qtwebchannel qtpositioning qtwebengine'
+          cache: true
+
+      - name: Install libmpv & deployment tools
+        run: |
+          brew install mpv dylibbundler
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_PREFIX_PATH="$QT_ROOT_DIR" \
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build (Release)
+        run: cmake --build build --parallel
+
+      # app bundle 由根 CMakeLists.txt:16 CMAKE_RUNTIME_OUTPUT_DIRECTORY 落在
+      # build/bin/ReEmby.app（单配置生成器无 Release 子目录）
+      - name: Bundle Qt frameworks (macdeployqt)
+        run: |
+          "$QT_ROOT_DIR/bin/macdeployqt" build/bin/ReEmby.app
+
+      # macdeployqt 只收 Qt 库; libmpv 及其 brew 依赖链（ffmpeg 等）由
+      # dylibbundler 递归收进 Contents/Frameworks 并修正 install_name
+      - name: Bundle libmpv & brew deps (dylibbundler)
+        run: |
+          dylibbundler -b \
+            -x build/bin/ReEmby.app/Contents/MacOS/ReEmby \
+            -d build/bin/ReEmby.app/Contents/Frameworks \
+            -p @executable_path/../Frameworks \
+            --overwrite-files
+
+      # arm64 上未签名 bundle 无法运行，ad-hoc 签名即可
+      - name: Ad-hoc codesign
+        run: |
+          codesign --force --deep --sign - build/bin/ReEmby.app
+
+      - name: Zip app bundle
+        run: |
+          cd build/bin
+          ditto -c -k --sequesterRsrc --keepParent ReEmby.app ReEmby-macos-arm64.zip
+
+      - name: Upload app bundle
+        uses: actions/upload-artifact@v5
+        with:
+          name: ReEmby-macos-arm64
+          path: build/bin/ReEmby-macos-arm64.zip
+          if-no-files-found: error

@@ -1,0 +1,737 @@
+#include "playerdanmakuidentifydialog.h"
+
+#include "loadingoverlay.h"
+#include "moderntoast.h"
+#include "seriesdanmakumatchdialog.h"
+#include "../managers/thememanager.h"
+
+#include <qembycore.h>
+#include <services/danmaku/danmakuservice.h>
+
+#include <QAbstractItemView>
+#include <QCoreApplication>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QPointer>
+#include <QPushButton>
+#include <QResizeEvent>
+#include <QSet>
+#include <QShowEvent>
+#include <QSize>
+#include <QSignalBlocker>
+#include <QtGlobal>
+#include <QVBoxLayout>
+#include <exception>
+#include <utility>
+
+namespace {
+
+constexpr int kDanmakuCandidateRole = Qt::UserRole + 410;
+
+QString providerDisplayName(const QString &provider)
+{
+    if (provider == QLatin1String("local-file")) {
+        return QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                           "Local File");
+    }
+    if (provider == QLatin1String("dandanplay")) {
+        return QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                           "DandanPlay");
+    }
+    if (provider == QLatin1String("danmu_api")) {
+        return QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                           "LogVar / danmu_api");
+    }
+    return provider.trimmed().isEmpty() ? QCoreApplication::translate(
+                                              "PlayerDanmakuIdentifyDialog",
+                                              "Unknown Source")
+                                        : provider.trimmed();
+}
+
+bool isLocalCandidate(const DanmakuMatchCandidate &candidate)
+{
+    return candidate.provider == QLatin1String("local-file");
+}
+
+QString candidateServerDisplayName(const DanmakuMatchCandidate &candidate)
+{
+    if (isLocalCandidate(candidate)) {
+        return providerDisplayName(candidate.provider);
+    }
+
+    const QString endpointName = candidate.endpointName.trimmed();
+    if (!endpointName.isEmpty()) {
+        return endpointName;
+    }
+
+    return providerDisplayName(candidate.provider);
+}
+
+QString candidateServerKey(const DanmakuMatchCandidate &candidate)
+{
+    const QString endpointId = candidate.endpointId.trimmed();
+    if (!endpointId.isEmpty()) {
+        return endpointId;
+    }
+
+    const QString endpointName = candidate.endpointName.trimmed();
+    if (!endpointName.isEmpty()) {
+        return endpointName;
+    }
+    return candidate.provider.trimmed();
+}
+
+int onlineServerCount(const QList<DanmakuMatchCandidate> &candidates)
+{
+    QSet<QString> servers;
+    for (const DanmakuMatchCandidate &candidate : candidates) {
+        if (!candidate.isValid() || isLocalCandidate(candidate)) {
+            continue;
+        }
+
+        const QString key = candidateServerKey(candidate);
+        if (!key.isEmpty()) {
+            servers.insert(key);
+        }
+    }
+    return servers.size();
+}
+
+QString candidateCountText(const DanmakuMatchCandidate &candidate)
+{
+    return candidate.commentCount > 0
+               ? QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                             "%1 comments")
+                     .arg(candidate.commentCount)
+               : QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                             "Comment count unavailable");
+}
+
+QString buildResultDisplayText(const DanmakuMatchCandidate &candidate)
+{
+    QString title =
+        candidate.displayText().trimmed().isEmpty()
+            ? QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                          "Unknown Danmaku")
+            : candidate.displayText().trimmed();
+    // Series-level candidates (e.g. Bilibili season) carry an embedded
+    // episode list; surface the episode count so the user knows clicking
+    // the row opens the two-stage episode picker.
+    if (candidate.isSeries()) {
+        title = QStringLiteral("%1 (%2)")
+                    .arg(title)
+                    .arg(candidate.episodes.size());
+    }
+    QStringList detailParts;
+    if (isLocalCandidate(candidate)) {
+        detailParts.append(providerDisplayName(candidate.provider));
+    } else {
+        detailParts.append(
+            QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                        "Server: %1")
+                .arg(candidateServerDisplayName(candidate)));
+        detailParts.append(providerDisplayName(candidate.provider));
+    }
+    detailParts.append(candidateCountText(candidate));
+    const QString detail = detailParts.join(QStringLiteral("  |  "));
+    return title + QStringLiteral("\n") + detail;
+}
+
+QString buildDetailText(const DanmakuMatchCandidate &candidate)
+{
+    QStringList sections;
+    if (isLocalCandidate(candidate)) {
+        sections.append(
+            QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                        "Source: %1")
+                .arg(providerDisplayName(candidate.provider)));
+    } else {
+        sections.append(
+            QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                        "Danmaku Server: %1")
+                .arg(candidateServerDisplayName(candidate)));
+        sections.append(
+            QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                        "Provider: %1")
+                .arg(providerDisplayName(candidate.provider)));
+    }
+    sections.append(
+        QCoreApplication::translate("PlayerDanmakuIdentifyDialog", "Title: %1")
+            .arg(candidate.title.trimmed().isEmpty()
+                     ? QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                                   "Unknown Danmaku")
+                     : candidate.title.trimmed()));
+
+    if (!candidate.subtitle.trimmed().isEmpty()) {
+        sections.append(
+            QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                        "Series: %1")
+                .arg(candidate.subtitle.trimmed()));
+    }
+
+    sections.append(
+        QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                    "Comments: %1")
+            .arg(candidate.commentCount > 0
+                     ? QString::number(candidate.commentCount)
+                     : QCoreApplication::translate(
+                           "PlayerDanmakuIdentifyDialog", "Unknown")));
+
+    if (candidate.score > 0.0) {
+        sections.append(
+            QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                        "Score: %1")
+                .arg(QString::number(candidate.score, 'f', 1)));
+    }
+
+    if (candidate.seasonNumber > 0 || candidate.episodeNumber > 0) {
+        sections.append(
+            QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                        "Episode: S%1E%2")
+                .arg(qMax(candidate.seasonNumber, 0), 2, 10, QChar('0'))
+                .arg(qMax(candidate.episodeNumber, 0), 2, 10, QChar('0')));
+    }
+
+    if (!candidate.matchReason.trimmed().isEmpty()) {
+        sections.append(
+            QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                        "Match Reason: %1")
+                .arg(candidate.matchReason.trimmed()));
+    }
+
+    if (!candidate.targetId.trimmed().isEmpty()) {
+        sections.append(
+            QCoreApplication::translate("PlayerDanmakuIdentifyDialog",
+                                        "Target: %1")
+                .arg(candidate.targetId.trimmed()));
+    }
+
+    return sections.join(QStringLiteral("\n"));
+}
+
+} 
+
+PlayerDanmakuIdentifyDialog::PlayerDanmakuIdentifyDialog(
+    QEmbyCore *core, DanmakuMediaContext context, QString initialKeyword,
+    QString activeTargetId, QString activeEndpointId, QWidget *parent)
+    : PlayerOverlayDialog(parent),
+      m_core(core),
+      m_context(std::move(context)),
+      m_initialKeyword(std::move(initialKeyword)),
+      m_activeTargetId(std::move(activeTargetId)),
+      m_activeEndpointId(std::move(activeEndpointId))
+{
+    setSurfaceObjectName("playerDanmakuIdentifyDialog");
+    setSurfacePreferredSize(QSize(820, 560));
+    setTitle(tr("Search Danmaku"));
+
+    const QString itemName =
+        m_context.displayTitle().trimmed().isEmpty()
+            ? tr("this video")
+            : m_context.displayTitle().trimmed();
+
+    m_promptLabel = new QLabel(
+        tr("Search danmaku sources for \"%1\" and choose the best match.")
+            .arg(itemName),
+        this);
+    m_promptLabel->setObjectName("dialog-text");
+    m_promptLabel->setWordWrap(true);
+    contentLayout()->addWidget(m_promptLabel);
+    contentLayout()->addSpacing(12);
+
+    auto *searchRow = new QHBoxLayout();
+    searchRow->setSpacing(12);
+
+    m_searchEdit = new QLineEdit(this);
+    m_searchEdit->setObjectName("PlaylistSearchEdit");
+    m_searchEdit->setPlaceholderText(tr("Enter title or keyword"));
+    m_searchEdit->setClearButtonEnabled(true);
+    m_searchEdit->addAction(
+        ThemeManager::getAdaptiveIcon(QStringLiteral(":/svg/light/search.svg")),
+        QLineEdit::LeadingPosition);
+    
+    
+    QString defaultKeyword = m_initialKeyword.trimmed();
+    if (defaultKeyword.isEmpty()) {
+        if (m_context.isEpisode() && !m_context.seriesName.trimmed().isEmpty()) {
+            defaultKeyword = m_context.seriesName.trimmed();
+        } else {
+            defaultKeyword = m_context.title.trimmed();
+        }
+    }
+    m_searchEdit->setText(defaultKeyword);
+    searchRow->addWidget(m_searchEdit, 1);
+
+    m_searchButton = new QPushButton(tr("Search"), this);
+    m_searchButton->setObjectName("dialog-btn-primary");
+    m_searchButton->setCursor(Qt::PointingHandCursor);
+    searchRow->addWidget(m_searchButton);
+
+    contentLayout()->addLayout(searchRow);
+    contentLayout()->addSpacing(10);
+
+    m_statusLabel = new QLabel(
+        tr("Search local files and enabled danmaku servers."), this);
+    m_statusLabel->setObjectName("dialog-text");
+    m_statusLabel->setWordWrap(true);
+    contentLayout()->addWidget(m_statusLabel);
+    contentLayout()->addSpacing(8);
+
+    auto *bodyLayout = new QHBoxLayout();
+    bodyLayout->setSpacing(20);
+
+    m_resultListContainer = new QWidget(this);
+    auto *listLayout = new QVBoxLayout(m_resultListContainer);
+    listLayout->setContentsMargins(0, 0, 0, 0);
+    listLayout->setSpacing(8);
+
+    
+    
+    m_filterEdit = new QLineEdit(m_resultListContainer);
+    m_filterEdit->setObjectName("PlaylistSearchEdit");
+    m_filterEdit->setPlaceholderText(tr("Filter results (title, series, server)"));
+    m_filterEdit->setClearButtonEnabled(true);
+    m_filterEdit->addAction(
+        ThemeManager::getAdaptiveIcon(QStringLiteral(":/svg/light/search.svg")),
+        QLineEdit::LeadingPosition);
+    m_filterEdit->setEnabled(false);
+    listLayout->addWidget(m_filterEdit);
+
+    m_resultList = new QListWidget(m_resultListContainer);
+    m_resultList->setObjectName("ManageLibPathList");
+    m_resultList->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_resultList->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    m_resultList->setAlternatingRowColors(false);
+    m_resultList->setWordWrap(true);
+    m_resultList->setUniformItemSizes(false);
+    m_resultList->setMinimumHeight(280);
+    listLayout->addWidget(m_resultList);
+
+    m_loadingOverlay = new LoadingOverlay(m_resultListContainer);
+    m_loadingOverlay->setHudPanelVisible(false);
+    m_loadingOverlay->setSubtleOverlay(true);
+
+    auto *detailPanel = new QWidget(this);
+    auto *detailLayout = new QVBoxLayout(detailPanel);
+    detailLayout->setContentsMargins(0, 0, 0, 0);
+    detailLayout->setSpacing(8);
+
+    auto *detailTitle =
+        new QLabel(tr("Danmaku Details"), detailPanel);
+    detailTitle->setObjectName("dialog-title");
+    detailLayout->addWidget(detailTitle);
+
+    m_detailLabel = new QLabel(detailPanel);
+    m_detailLabel->setObjectName("dialog-text");
+    m_detailLabel->setWordWrap(true);
+    m_detailLabel->setAlignment(Qt::AlignTop | Qt::AlignLeft);
+    m_detailLabel->setMinimumWidth(260);
+    m_detailLabel->setText(tr("Select a danmaku source to view details."));
+    detailLayout->addWidget(m_detailLabel, 1);
+
+    bodyLayout->addWidget(detailPanel, 0);
+    bodyLayout->addWidget(m_resultListContainer, 1);
+
+    contentLayout()->addLayout(bodyLayout, 1);
+    contentLayout()->addSpacing(24);
+
+    auto *buttonLayout = new QHBoxLayout();
+    buttonLayout->setSpacing(12);
+    buttonLayout->addStretch();
+
+    auto *cancelButton = new QPushButton(tr("Cancel"), this);
+    cancelButton->setObjectName("dialog-btn-cancel");
+    cancelButton->setCursor(Qt::PointingHandCursor);
+    connect(cancelButton, &QPushButton::clicked, this,
+            &PlayerOverlayDialog::reject);
+    buttonLayout->addWidget(cancelButton);
+
+    m_applyButton = new QPushButton(tr("Load Danmaku"), this);
+    m_applyButton->setObjectName("dialog-btn-primary");
+    m_applyButton->setCursor(Qt::PointingHandCursor);
+    m_applyButton->setEnabled(false);
+    connect(m_applyButton, &QPushButton::clicked, this, [this]() {
+        if (selectedCandidate().isValid()) {
+            accept();
+        }
+    });
+    buttonLayout->addWidget(m_applyButton);
+
+    contentLayout()->addLayout(buttonLayout);
+
+    connect(m_searchButton, &QPushButton::clicked, this,
+            [this]() { triggerSearch(); });
+    connect(m_searchEdit, &QLineEdit::returnPressed, this,
+            [this]() { triggerSearch(); });
+    connect(m_resultList, &QListWidget::itemSelectionChanged, this,
+            [this]() {
+                refreshDetail();
+                updateApplyButtonState();
+            });
+    connect(m_resultList, &QListWidget::itemClicked, this,
+            [this](QListWidgetItem *item) {
+                const QVariant data = item->data(kDanmakuCandidateRole);
+                if (!data.canConvert<DanmakuMatchCandidate>()) {
+                    return;
+                }
+                const DanmakuMatchCandidate candidate =
+                    data.value<DanmakuMatchCandidate>();
+                if (candidate.isSeries()) {
+                    openSeriesEpisodePicker(candidate);
+                }
+            });
+    connect(m_filterEdit, &QLineEdit::textChanged, this,
+            [this](const QString &text) {
+                m_filterText = text;
+                applyResultFilter();
+            });
+
+    updateLoadingOverlayGeometry();
+    updateUiState();
+}
+
+DanmakuMatchCandidate PlayerDanmakuIdentifyDialog::selectedCandidate() const
+{
+    // An episode picked inside a series candidate wins over a plain row.
+    if (m_episodeOverride.isValid()) {
+        return m_episodeOverride;
+    }
+    const QListWidgetItem *item =
+        m_resultList ? m_resultList->currentItem() : nullptr;
+    if (!item) {
+        return {};
+    }
+
+    const QVariant data = item->data(kDanmakuCandidateRole);
+    if (!data.canConvert<DanmakuMatchCandidate>()) {
+        return {};
+    }
+    return data.value<DanmakuMatchCandidate>();
+}
+
+void PlayerDanmakuIdentifyDialog::openSeriesEpisodePicker(
+    const DanmakuMatchCandidate &seriesCandidate)
+{
+    if (m_isLoading) {
+        return;
+    }
+    auto *dialog = new SeriesDanmakuMatchDialog(
+        m_core, SeriesDanmakuMatchDialog::Mode::Single,
+        {seriesCandidate}, m_context, QString(), m_activeTargetId,
+        m_activeEndpointId, QList<int>(), this);
+    connect(dialog, &SeriesDanmakuMatchDialog::finished, this,
+            [this, dialog](int result) {
+                if (result == PlayerOverlayDialog::Accepted) {
+                    const QList<DanmakuMatchCandidate> picked =
+                        dialog->selectedEpisodes();
+                    if (!picked.isEmpty()) {
+                        m_episodeOverride = picked.constFirst();
+                        accept();
+                    }
+                }
+                dialog->deleteLater();
+            });
+    dialog->open();
+}
+
+void PlayerDanmakuIdentifyDialog::showEvent(QShowEvent *event)
+{
+    PlayerOverlayDialog::showEvent(event);
+    updateLoadingOverlayGeometry();
+    if (m_searchEdit) {
+        m_searchEdit->setFocus();
+        m_searchEdit->selectAll();
+    }
+
+    if (!m_loaded) {
+        m_loaded = true;
+        triggerSearch();
+    }
+}
+
+void PlayerDanmakuIdentifyDialog::resizeEvent(QResizeEvent *event)
+{
+    PlayerOverlayDialog::resizeEvent(event);
+    updateLoadingOverlayGeometry();
+}
+
+QCoro::Task<void> PlayerDanmakuIdentifyDialog::searchMatches(QString queryText)
+{
+    QPointer<PlayerDanmakuIdentifyDialog> safeThis(this);
+    QPointer<QEmbyCore> core(m_core);
+    const DanmakuMediaContext context = m_context;
+    queryText = queryText.trimmed();
+    if (queryText.isEmpty()) {
+        queryText = context.displayTitle().trimmed();
+    }
+    if (queryText.isEmpty()) {
+        queryText = context.title.trimmed();
+    }
+
+    if (!safeThis || !core || !core->danmakuService()) {
+        co_return;
+    }
+
+    m_isLoading = true;
+    updateStatusText(tr("Searching local files and enabled danmaku servers..."));
+    updateUiState();
+
+    qDebug().noquote()
+        << "[Danmaku][IdentifyDialog] Search start"
+        << "| mediaId:" << context.mediaId
+        << "| keyword:" << queryText;
+
+    try {
+        const QList<DanmakuMatchCandidate> results =
+            co_await core->danmakuService()->searchAllCandidates(context,
+                                                                 queryText);
+        if (!safeThis) {
+            co_return;
+        }
+
+        safeThis->m_results = results;
+        safeThis->m_isLoading = false;
+        safeThis->rebuildResultList();
+        
+        
+        
+        
+        
+        safeThis->updateResultStatusText();
+        safeThis->updateUiState();
+
+        qDebug().noquote()
+            << "[Danmaku][IdentifyDialog] Search finished"
+            << "| mediaId:" << context.mediaId
+            << "| resultCount:" << results.size();
+    } catch (const std::exception &e) {
+        if (!safeThis) {
+            co_return;
+        }
+
+        safeThis->m_results.clear();
+        safeThis->m_isLoading = false;
+        safeThis->rebuildResultList();
+        safeThis->updateStatusText(tr("Search failed"));
+        safeThis->updateUiState();
+
+        qWarning().noquote()
+            << "[Danmaku][IdentifyDialog] Search failed"
+            << "| mediaId:" << context.mediaId
+            << "| keyword:" << queryText
+            << "| error:" << e.what();
+        ModernToast::showMessage(
+            tr("Failed to search danmaku: %1").arg(QString::fromUtf8(e.what())),
+            3000);
+    }
+}
+
+void PlayerDanmakuIdentifyDialog::triggerSearch()
+{
+    if (!m_searchEdit || m_isLoading) {
+        return;
+    }
+    m_pendingTask = searchMatches(m_searchEdit->text());
+}
+
+void PlayerDanmakuIdentifyDialog::rebuildResultList()
+{
+    if (!m_resultList) {
+        return;
+    }
+
+    
+    
+    
+    const QString filter = m_filterText.trimmed();
+    const auto candidateMatchesFilter = [&filter](
+                                            const DanmakuMatchCandidate &candidate,
+                                            const QString &displayText) {
+        if (filter.isEmpty()) {
+            return true;
+        }
+        if (displayText.contains(filter, Qt::CaseInsensitive)) {
+            return true;
+        }
+        if (candidate.endpointName.contains(filter, Qt::CaseInsensitive)) {
+            return true;
+        }
+        if (candidate.provider.contains(filter, Qt::CaseInsensitive)) {
+            return true;
+        }
+        if (candidate.targetId.contains(filter, Qt::CaseInsensitive)) {
+            return true;
+        }
+        return false;
+    };
+
+    QSignalBlocker blocker(m_resultList);
+    m_resultList->clear();
+
+    int visibleCount = 0;
+    for (const DanmakuMatchCandidate &candidate : std::as_const(m_results)) {
+        const QString displayText = buildResultDisplayText(candidate);
+        if (!candidateMatchesFilter(candidate, displayText)) {
+            continue;
+        }
+
+        auto *item = new QListWidgetItem(displayText, m_resultList);
+        item->setData(kDanmakuCandidateRole, QVariant::fromValue(candidate));
+        item->setToolTip(buildDetailText(candidate));
+        item->setSizeHint(QSize(0, 64));
+        ++visibleCount;
+    }
+    m_visibleResultCount = visibleCount;
+
+    if (m_resultList->count() > 0) {
+        
+        int targetRow = 0;
+        if (!m_activeTargetId.isEmpty()) {
+            for (int i = 0; i < m_resultList->count(); ++i) {
+                const auto data =
+                    m_resultList->item(i)->data(kDanmakuCandidateRole);
+                if (!data.canConvert<DanmakuMatchCandidate>()) {
+                    continue;
+                }
+
+                const DanmakuMatchCandidate candidate =
+                    data.value<DanmakuMatchCandidate>();
+                const bool sameTarget = candidate.targetId == m_activeTargetId;
+                const bool sameEndpoint =
+                    m_activeEndpointId.trimmed().isEmpty() ||
+                    candidate.endpointId == m_activeEndpointId;
+                if (sameTarget && sameEndpoint) {
+                    targetRow = i;
+                    break;
+                }
+            }
+        }
+        m_resultList->setCurrentRow(targetRow);
+    }
+
+    refreshDetail();
+    updateApplyButtonState();
+
+    if (m_filterEdit) {
+        m_filterEdit->setEnabled(!m_isLoading && !m_results.isEmpty());
+    }
+}
+
+void PlayerDanmakuIdentifyDialog::applyResultFilter()
+{
+    rebuildResultList();
+    updateResultStatusText();
+}
+
+void PlayerDanmakuIdentifyDialog::refreshDetail()
+{
+    if (!m_detailLabel) {
+        return;
+    }
+
+    const DanmakuMatchCandidate candidate = selectedCandidate();
+    if (!candidate.isValid()) {
+        m_detailLabel->setText(tr("Select a danmaku source to view details."));
+        return;
+    }
+
+    m_detailLabel->setText(buildDetailText(candidate));
+}
+
+void PlayerDanmakuIdentifyDialog::updateLoadingOverlayGeometry()
+{
+    if (!m_loadingOverlay || !m_resultListContainer) {
+        return;
+    }
+    m_loadingOverlay->setGeometry(m_resultListContainer->rect());
+}
+
+void PlayerDanmakuIdentifyDialog::updateUiState()
+{
+    if (m_searchEdit) {
+        m_searchEdit->setEnabled(!m_isLoading);
+    }
+    if (m_searchButton) {
+        m_searchButton->setEnabled(!m_isLoading);
+    }
+    if (m_resultList) {
+        m_resultList->setEnabled(!m_isLoading);
+    }
+    if (m_filterEdit) {
+        
+        m_filterEdit->setEnabled(!m_isLoading && !m_results.isEmpty());
+    }
+    if (m_loadingOverlay) {
+        updateLoadingOverlayGeometry();
+        if (m_isLoading) {
+            m_loadingOverlay->start();
+        } else {
+            m_loadingOverlay->stop();
+        }
+    }
+
+    updateApplyButtonState();
+}
+
+void PlayerDanmakuIdentifyDialog::updateApplyButtonState()
+{
+    if (!m_applyButton) {
+        return;
+    }
+
+    m_applyButton->setEnabled(!m_isLoading && selectedCandidate().isValid());
+}
+
+void PlayerDanmakuIdentifyDialog::updateStatusText(const QString &text)
+{
+    if (m_statusLabel) {
+        m_statusLabel->setText(text);
+    }
+}
+
+void PlayerDanmakuIdentifyDialog::updateResultStatusText()
+{
+    if (!m_statusLabel) {
+        return;
+    }
+
+    if (m_isLoading) {
+        
+        return;
+    }
+
+    if (m_results.isEmpty()) {
+        updateStatusText(tr("No matches found"));
+        return;
+    }
+
+    const QString filter = m_filterText.trimmed();
+    const int totalCount = m_results.size();
+    const int serverCount = onlineServerCount(m_results);
+
+    if (filter.isEmpty()) {
+        updateStatusText(
+            serverCount > 1
+                ? tr("Found %1 matches from %2 danmaku servers")
+                      .arg(totalCount)
+                      .arg(serverCount)
+                : tr("Found %1 matches").arg(totalCount));
+        return;
+    }
+
+    if (m_visibleResultCount == 0) {
+        updateStatusText(
+            tr("No results match \"%1\" (%2 total)")
+                .arg(filter)
+                .arg(totalCount));
+        return;
+    }
+
+    updateStatusText(tr("Showing %1 of %2 matches for \"%3\"")
+                         .arg(m_visibleResultCount)
+                         .arg(totalCount)
+                         .arg(filter));
+}
