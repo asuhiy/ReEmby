@@ -41,6 +41,10 @@ constexpr const char* CloseToTray = "general/close_to_tray";
 constexpr const char* SingleApplication = "general/single_application";
 constexpr const char* CheckForUpdates = "general/check_for_updates";
 constexpr const char* IgnoredUpdateVersion = "general/ignored_update_version";
+// 上次「自动」检查更新的时间（Unix 秒）。用来给自动检查节流：
+// GitHub 未认证 API 的配额是 60 次/小时/IP，每次启动都查一次很容易耗光
+//（开发期反复启动客户端实测踩到过）。手动检查不记账、不受此限制。
+constexpr const char* UpdateLastAutomaticCheck = "update/last_automatic_check";
 constexpr const char* LogEnable = "general/log_enable";
 constexpr const char* ApiTimeout = "general/api_timeout";
 constexpr const char* ImageCacheLimit = "general/image_cache_limit";

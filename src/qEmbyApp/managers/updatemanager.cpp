@@ -22,6 +22,12 @@ namespace {
 const QUrl kLatestReleaseApi(
     QStringLiteral("https://api.github.com/repos/asuhiy/ReEmby/releases/latest"));
 
+// 自动检查的最小间隔。GitHub 未认证 API 的配额是 60 次/小时/IP，而本程序
+// 每次启动都会自动查一次 —— 开发期反复启动客户端就能把配额耗光（实测踩到
+// 「已达到 GitHub 访问频率上限」）。6 小时 ⇒ 一天最多 4 次，远低于上限，
+// 更新提示也不至于太滞后。想立刻检查可以走「关于」页的手动检查。
+constexpr qint64 kAutomaticCheckMinIntervalSecs = 6 * 3600;
+
 QString normalizedVersion(QString version)
 {
     version = version.trimmed();
@@ -87,12 +93,43 @@ UpdateManager *UpdateManager::instance()
 UpdateManager::UpdateManager(QObject *parent)
     : QObject(parent), m_networkManager(new QNetworkAccessManager(this))
 {
+    const qint64 lastCheckSecs = ConfigStore::instance()->get<qint64>(
+        QString::fromLatin1(ConfigKeys::UpdateLastAutomaticCheck), 0);
+    if (lastCheckSecs > 0) {
+        m_lastAutomaticCheck = QDateTime::fromSecsSinceEpoch(lastCheckSecs);
+    }
+
+    // 用户重新打开「检查更新」开关时清掉节流记录 —— 否则要等满一个间隔
+    // 才会去查，看起来像是坏了。
+    connect(ConfigStore::instance(), &ConfigStore::valueChanged, this,
+            [this](const QString &key, const QVariant &value) {
+                if (key == ConfigKeys::CheckForUpdates && value.toBool()) {
+                    m_lastAutomaticCheck = QDateTime();
+                }
+            });
 }
 
 bool UpdateManager::isChecking(CheckMode mode) const
 {
     return mode == CheckMode::Automatic ? m_automaticCheckInProgress
                                         : m_manualCheckInProgress;
+}
+
+bool UpdateManager::shouldRunAutomaticCheck() const
+{
+    if (!m_lastAutomaticCheck.isValid()) {
+        return true;  // 从没查过，或刚被「重新打开开关」重置
+    }
+    return m_lastAutomaticCheck.secsTo(QDateTime::currentDateTime()) >=
+           kAutomaticCheckMinIntervalSecs;
+}
+
+void UpdateManager::rememberAutomaticCheck()
+{
+    m_lastAutomaticCheck = QDateTime::currentDateTime();
+    ConfigStore::instance()->set(
+        QString::fromLatin1(ConfigKeys::UpdateLastAutomaticCheck),
+        m_lastAutomaticCheck.toSecsSinceEpoch());
 }
 
 void UpdateManager::checkForUpdates(CheckMode mode)
@@ -107,7 +144,21 @@ void UpdateManager::checkForUpdates(CheckMode mode)
         return;
     }
 
+    // 自动检查要节流，手动检查不节流（那是用户的明确意图）。
+    if (mode == CheckMode::Automatic && !shouldRunAutomaticCheck()) {
+        qInfo() << "UpdateManager: automatic check throttled"
+                << "| lastCheck=" << m_lastAutomaticCheck.toString(Qt::ISODate);
+        return;
+    }
+
     inProgress = true;
+
+    // 记账放在"发起请求"时、而不是等成功之后：否则一旦失败，下次启动又
+    // 会重试，配额反而更容易被耗光。
+    if (mode == CheckMode::Automatic) {
+        rememberAutomaticCheck();
+    }
+
     qInfo() << "UpdateManager: checking GitHub release"
             << "| mode=" << (mode == CheckMode::Automatic ? "automatic" : "manual")
             << "| currentVersion=" << QCoreApplication::applicationVersion();

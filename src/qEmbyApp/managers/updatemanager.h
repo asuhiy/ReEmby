@@ -47,10 +47,16 @@ private:
     explicit UpdateManager(QObject *parent = nullptr);
     void handleReply(QNetworkReply *reply, CheckMode mode);
 
+    // 自动检查的节流：距上次不足 kAutomaticCheckMinIntervalSecs 就跳过。
+    // 手动检查（关于页点的）不受限制 —— 那是用户的明确意图。
+    bool shouldRunAutomaticCheck() const;
+    void rememberAutomaticCheck();
+
     QNetworkAccessManager *m_networkManager = nullptr;
     bool m_automaticCheckInProgress = false;
     bool m_manualCheckInProgress = false;
     QString m_openedVersion;
+    QDateTime m_lastAutomaticCheck;
 };
 
 #endif 
