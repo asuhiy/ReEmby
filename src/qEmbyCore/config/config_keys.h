@@ -331,6 +331,15 @@ constexpr const char* DownloadDirectory = "download/directory";
 constexpr const char* DownloadHistoryRecords = "download/history_records";
 constexpr const char* DownloadDeleteFileWithRecord =
     "download/delete_file_with_record";
+
+
+
+
+// Icon pack sources: user-added icon pack JSON URLs, stored as a compact
+// JSON array string "[{\"url\":...,\"name\":...}, ...]". The built-in
+// sources are compiled in (see IconPackService::builtinSources) and are
+// deliberately not persisted here.
+constexpr const char* IconPackCustomSources = "iconpacks/custom_sources";
 }
 
 #endif 
