@@ -1346,32 +1346,6 @@ void PlayerView::setupUi()
                 m_isBuffering = false;
                 updateLoadingState();
                 applySubtitleStyleSettings();
-
-                // 诊断日志：播放 5 秒后检查字幕选流与解码状态，
-                // 用于区分「解码层无数据（sub-text 为空）」和
-                // 「渲染层吞字幕（sub-text 有内容但不显示）」
-                if (m_mpvWidget && m_mpvWidget->controller())
-                {
-                    auto *ctrl = m_mpvWidget->controller();
-                    QTimer::singleShot(5000, this, [ctrl]()
-                    {
-                        if (!ctrl->mpv())
-                            return;
-                        const QVariant sid = ctrl->getProperty("sid");
-                        const QVariant subText = ctrl->getProperty("sub-text");
-                        const QVariant subVis = ctrl->getProperty("sub-visibility");
-                        const QVariant hwdec = ctrl->getProperty("hwdec-current");
-                        const QVariant pixFmt = ctrl->getProperty("video-params/pixelformat");
-                        qInfo().noquote()
-                            << "[PlayerView] Subtitle diagnostic (5s after load)"
-                            << "| sid:" << sid.toString()
-                            << "| sub-visibility:" << subVis.toString()
-                            << "| sub-text-len:" << subText.toString().size()
-                            << "| sub-text:" << subText.toString().left(40)
-                            << "| hwdec:" << hwdec.toString()
-                            << "| pixfmt:" << pixFmt.toString();
-                    });
-                }
             });
     
 
