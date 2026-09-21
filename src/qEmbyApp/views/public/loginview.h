@@ -2,6 +2,7 @@
 #define LOGINVIEW_H
 
 #include <QWidget>
+#include <QPointer>
 #include <optional>
 #include <qcorotask.h>
 #include "../../managers/thememanager.h"
@@ -144,8 +145,14 @@ private:
     void rebuildServerRows(
         RowScrollIntent intent = RowScrollIntent::KeepSelected);
     QWidget* createServerRow(const ServerProfile& server);
-    // 弹出行尾「⋮」菜单（编辑 / 上移 / 下移 / 置顶 / 置底 / 删除）。
+    // 弹出行尾「⋮」菜单（编辑 / 更换图标 / 上移 / 下移 / 置顶 / 置底 / 删除）。
     void showServerMenu(const QString& serverId, QWidget* anchor);
+    // 打开「选择图标」对话框，把结果写进该服务器的 iconBase64
+    //（选「使用默认图标」则清空，回落到内置图标）。
+    void onChangeIconRequested(const QString& serverId);
+    // 打开「媒体库信息」。它是非模态的，所以留个引用来避免重复开窗。
+    void onLibraryInfoRequested();
+    QPointer<QWidget> m_libraryInfoDialog;
     // 把服务器移动到指定下标（越界由 ServerManager 夹取），
     // 并按 intent 决定重排后滚动条的落点。
     void moveServerTo(const QString& serverId, int newIndex,

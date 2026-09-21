@@ -6858,3 +6858,137 @@ QLabel#scoped-title {
 #scoped-grid {
     background-color: transparent;
 }
+
+/* ────────────────────────── 选择图标对话框 ────────────────────────── */
+
+QLabel#icon-source-description {
+    color: #64748B;
+    font-size: 12px;
+}
+
+QPushButton#icon-add-source-btn {
+    background: transparent;
+    border: none;
+    color: #2563EB;
+    font-size: 13px;
+    padding: 4px 2px;
+}
+
+QPushButton#icon-add-source-btn:hover {
+    color: #1D4ED8;
+}
+
+QPushButton#icon-source-menu-btn {
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 0px;
+}
+
+QPushButton#icon-source-menu-btn:hover {
+    background-color: #E5E7EB;
+}
+
+QPushButton#icon-source-menu-btn:pressed {
+    background-color: #D1D5DB;
+}
+
+QListWidget#icon-grid {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+QListWidget#icon-grid::item {
+    border: 1px solid transparent;
+    border-radius: 10px;
+    color: #475569;
+    font-size: 12px;
+    padding: 6px 2px;
+}
+
+QListWidget#icon-grid::item:hover {
+    background-color: rgba(15, 23, 42, 0.05);
+    border-color: rgba(15, 23, 42, 0.15);
+}
+
+QListWidget#icon-grid::item:selected {
+    background-color: rgba(59, 130, 246, 0.12);
+    border-color: #3B82F6;
+    color: #0F172A;
+}
+
+QLabel#icon-status-label {
+    color: #64748B;
+    font-size: 13px;
+}
+
+QPushButton#icon-retry-btn {
+    background-color: rgba(15, 23, 42, 0.05);
+    border: 1px solid rgba(15, 23, 42, 0.12);
+    border-radius: 8px;
+    color: #334155;
+    font-size: 13px;
+    padding: 5px 18px;
+}
+
+QPushButton#icon-retry-btn:hover {
+    background-color: rgba(15, 23, 42, 0.08);
+}
+
+QScrollBar#iconGridScrollBar:vertical {
+    background: transparent;
+    border: none;
+    width: 10px;
+    margin: 2px 0px;
+}
+
+QScrollBar#iconGridScrollBar::handle:vertical {
+    background: rgba(100, 116, 139, 0.45);
+    border-radius: 3px;
+    min-height: 30px;
+    margin: 0px 1px;
+}
+
+QScrollBar#iconGridScrollBar::handle:vertical:hover,
+QScrollBar#iconGridScrollBar::handle:vertical:pressed {
+    background: rgba(100, 116, 139, 0.70);
+}
+
+QScrollBar#iconGridScrollBar::add-line:vertical,
+QScrollBar#iconGridScrollBar::sub-line:vertical,
+QScrollBar#iconGridScrollBar::add-page:vertical,
+QScrollBar#iconGridScrollBar::sub-page:vertical {
+    background: transparent;
+    border: none;
+    height: 0px;
+}
+
+QPushButton#dialog-btn-primary:disabled {
+    background-color: rgba(59, 130, 246, 0.35);
+    color: rgba(255, 255, 255, 0.70);
+}
+
+/* ────────────────────────── 媒体库信息对话框 ────────────────────────── */
+
+QWidget#library-stat-card {
+    background-color: #F1F5F9;
+    border-radius: 10px;
+}
+
+QLabel#library-stat-title {
+    color: #334155;
+    font-size: 14px;
+}
+
+QLabel#library-stat-value {
+    color: #2563EB;
+    font-size: 19px;
+    font-weight: 600;
+}
+
+QLabel#library-info-status {
+    color: #64748B;
+    font-size: 12px;
+    padding: 2px 4px;
+}

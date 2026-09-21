@@ -1,4 +1,6 @@
 #include "loginview.h"
+#include "../../components/iconpickerdialog.h"
+#include "../../components/libraryinfodialog.h"
 #include "../../components/loadingoverlay.h"
 #include "../../components/moderncombobox.h"
 #include "../../components/modernmessagebox.h"
@@ -522,17 +524,21 @@ void LoginView::setupAddPage() {
     m_addPage->setObjectName("login-add-page");
     m_addPage->setAttribute(Qt::WA_StyledBackground, true);
     // 列表页现在是 600 宽（见 setupUi），表单页跟着变宽会把输入框拉得很长。
-    // 这里外层只负责居中，表单本身维持原来的宽度。
-    auto *pageLayout = new QHBoxLayout(m_addPage);
-    pageLayout->setContentsMargins(0, 0, 0, 0);
+    // 这里外层只负责把表单居中，表单本身维持原来的宽度。
+    // 垂直方向也要居中：原来外层是 QHBoxLayout，formContainer 会被拉满高度，
+    // 而内部末尾那个 addStretch 又把 footer 推到底 => 中间空一大片、footer 贴底。
+    auto *pageLayout = new QVBoxLayout(m_addPage);
+    pageLayout->setContentsMargins(0, 16, 0, 16);
     auto *formContainer = new QWidget(m_addPage);
     formContainer->setObjectName("login-add-form");
     formContainer->setFixedWidth(kAddFormWidth);
     auto *layout = new QVBoxLayout(formContainer);
     layout->setSpacing(8);
     layout->setContentsMargins(8, 8, 8, 8);
+    // 上下各留一份可伸缩空白 => 表单在页内垂直居中。
+    // 空间不够时两份 stretch 会被压成 0，自然退化为顶部对齐，不会把内容挤没。
     pageLayout->addStretch();
-    pageLayout->addWidget(formContainer);
+    pageLayout->addWidget(formContainer, 0, Qt::AlignHCenter);
     pageLayout->addStretch();
 
   auto *titleLabel = new QLabel(tr("Connect to Server"), this);
@@ -944,6 +950,18 @@ void LoginView::showServerMenu(const QString &serverId, QWidget *anchor) {
   connect(editAction, &QAction::triggered, this,
           [this, serverId]() { onEditServerClicked(serverId); });
 
+  QAction *iconAction = menu.addAction(tr("Change Icon"));
+  connect(iconAction, &QAction::triggered, this, [this, serverId]() {
+    // 此刻还在 QMenu::exec() 的嵌套事件循环里，直接再开一个模态对话框
+    // 会让菜单来不及收起，所以推到下一个事件循环再开。
+    QTimer::singleShot(0, this,
+                       [this, serverId]() { onChangeIconRequested(serverId); });
+  });
+
+  QAction *libraryAction = menu.addAction(tr("Library Info"));
+  connect(libraryAction, &QAction::triggered, this,
+          [this]() { onLibraryInfoRequested(); });
+
   menu.addSeparator();
 
   // 两端的排序项置灰，省掉"点了没反应"。
@@ -980,6 +998,52 @@ void LoginView::showServerMenu(const QString &serverId, QWidget *anchor) {
           [this, serverId]() { onRemoveServerClicked(serverId); });
 
   menu.exec(anchor->mapToGlobal(QPoint(0, anchor->height())));
+}
+
+void LoginView::onChangeIconRequested(const QString &serverId) {
+  IconPickerDialog dialog(this);
+  if (dialog.exec() != QDialog::Accepted) {
+    return;
+  }
+
+  if (dialog.defaultIconRequested()) {
+    // 「使用默认图标」= 清空自定义图标，列表会回落到内置的 emby / jellyfin 图。
+    m_core->serverManager()->updateServerProfile(
+        serverId, [](ServerProfile &profile) { profile.iconBase64.clear(); });
+    rebuildServerRows(RowScrollIntent::Preserve);
+    return;
+  }
+
+  const QByteArray iconData = dialog.selectedIconData();
+  if (iconData.isEmpty()) {
+    return;
+  }
+
+  // 列表页读的是 base64 文本（base64 -> QByteArray -> QPixmap），照旧存。
+  const QString encoded = QString::fromLatin1(iconData.toBase64());
+  m_core->serverManager()->updateServerProfile(
+      serverId,
+      [&encoded](ServerProfile &profile) { profile.iconBase64 = encoded; });
+
+  // 让行里的图标立刻换掉，同时保持原来的滚动位置。
+  rebuildServerRows(RowScrollIntent::Preserve);
+}
+
+void LoginView::onLibraryInfoRequested() {
+  // 非模态：已经开着就把它提到前面，不重复开窗。
+  if (m_libraryInfoDialog) {
+    m_libraryInfoDialog->show();
+    m_libraryInfoDialog->raise();
+    m_libraryInfoDialog->activateWindow();
+    return;
+  }
+
+  auto *dialog = new LibraryInfoDialog(m_core, this);
+  dialog->setAttribute(Qt::WA_DeleteOnClose);
+  dialog->show();
+  dialog->raise();
+  dialog->activateWindow();
+  m_libraryInfoDialog = dialog;
 }
 
 void LoginView::moveServerTo(const QString &serverId, int newIndex,

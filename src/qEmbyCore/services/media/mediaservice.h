@@ -94,6 +94,17 @@ struct QEMBYCORE_EXPORT MediaQueryPage {
     }
 };
 
+// 服务器内容统计（「媒体库信息」弹窗用）。
+// 走 /Items/Counts：服务端只做计数、不返回条目，所以非常轻（一次请求拿三个数）。
+struct QEMBYCORE_EXPORT LibraryStats {
+    int movieCount = 0;    // 电影
+    int seriesCount = 0;   // 电视剧（剧）
+    int episodeCount = 0;  // 剧集（单集）
+    QString errorMessage;
+
+    bool succeeded() const { return errorMessage.isEmpty(); }
+};
+
 class ServerManager;
 class QNetworkAccessManager;
 
@@ -121,6 +132,11 @@ public:
     
     QCoro::Task<QList<MediaItem>> getUserViews(bool includeHidden = false);
     void clearUserViewsCache();
+
+    // 拉取当前服务器的内容统计（电影 / 电视剧 / 剧集的数量）。
+    // 失败（含未登录）时返回带 errorMessage 的结果，不抛异常 —— UI 要显示失败态。
+    QCoro::Task<LibraryStats> getLibraryStats();
+
     
     QCoro::Task<MediaQueryPage> getLibraryItemsPage(const QString& parentId, const QString& sortBy = "IsFolder,SortName", const QString& sortOrder = "Ascending", const QString& filters = "", const QString& includeItemTypes = "", int startIndex = 0, int limit = 50, bool recursive = false, bool includeChildCount = false);
     QCoro::Task<QList<MediaItem>> getLibraryItems(const QString& parentId, const QString& sortBy = "IsFolder,SortName", const QString& sortOrder = "Ascending", const QString& filters = "", const QString& includeItemTypes = "", int startIndex = 0, int limit = 50, bool recursive = false, bool includeChildCount = false);
@@ -275,6 +291,9 @@ private:
     
     
     void ensureValidProfile() const;
+    // 按 Item 类型取总数。只要计数：Limit=1 让服务端把 TotalRecordCount 带回来，
+    // 不拉条目（URL 形状与项目其它 /Items 调用一致）。
+    QCoro::Task<int> countItemsByType(QString includeItemTypes);
     QCoro::Task<MediaQueryPage> fetchItemPage(QString basePath,
                                               int startIndex, int limit,
                                               QString context,

@@ -570,6 +570,89 @@ QCoro::Task<QList<MediaItem>> MediaService::getUserViews(bool includeHidden)
     co_return views;
 }
 
+QCoro::Task<LibraryStats> MediaService::getLibraryStats()
+{
+    LibraryStats stats;
+    try {
+        ensureValidProfile();
+    } catch (const std::exception &e) {
+        // 未登录 / 会话失效：把原因交回 UI 显示，不在这里弹窗。
+        stats.errorMessage = QString::fromUtf8(e.what());
+        co_return stats;
+    }
+
+    const ServerProfile profile = m_serverManager->activeProfile();
+
+    // 大库的计数也要遍历元数据，给足 20s。
+    constexpr int kStatsTimeoutMs = 20000;
+
+    // ① 首选 /Items/Counts：一次请求拿三个数字（服务端只做计数、不返回条目）。
+    //    显式带 UserId，让它按当前用户的可见范围统计 —— 否则会把用户看不到的
+    //    库也算进去。
+    try {
+        const QJsonObject response = co_await m_serverManager->activeClient()->get(
+            QStringLiteral("/Items/Counts?UserId=%1").arg(profile.userId),
+            kStatsTimeoutMs);
+
+        if (response.contains(QStringLiteral("MovieCount")) ||
+            response.contains(QStringLiteral("EpisodeCount"))) {
+            stats.movieCount =
+                response.value(QStringLiteral("MovieCount")).toInt();
+            stats.seriesCount =
+                response.value(QStringLiteral("SeriesCount")).toInt();
+            stats.episodeCount =
+                response.value(QStringLiteral("EpisodeCount")).toInt();
+            qDebug() << "[MediaService] getLibraryStats via /Items/Counts"
+                     << "| movies=" << stats.movieCount
+                     << "| series=" << stats.seriesCount
+                     << "| episodes=" << stats.episodeCount;
+            co_return stats;
+        }
+        qWarning() << "[MediaService] /Items/Counts returned no count fields";
+    } catch (const std::exception &e) {
+        // 并非所有服务端版本都提供这个端点 —— 交给下面的回退路径。
+        qWarning() << "[MediaService] /Items/Counts unavailable, falling back"
+                   << "| error=" << QString::fromUtf8(e.what());
+    }
+
+    // ② 回退：按类型分别取 TotalRecordCount。三个请求都很轻（只回计数），
+    //    URL 形状与项目其它 /Users/<id>/Items 调用完全一致，确定性最高。
+    try {
+        stats.movieCount = co_await countItemsByType(QStringLiteral("Movie"));
+        stats.seriesCount = co_await countItemsByType(QStringLiteral("Series"));
+        stats.episodeCount =
+            co_await countItemsByType(QStringLiteral("Episode"));
+    } catch (const std::exception &e) {
+        stats.errorMessage = QString::fromUtf8(e.what());
+        qWarning() << "[MediaService] getLibraryStats failed"
+                   << "| error=" << stats.errorMessage;
+        co_return stats;
+    }
+
+    qDebug() << "[MediaService] getLibraryStats via per-type count"
+             << "| movies=" << stats.movieCount
+             << "| series=" << stats.seriesCount
+             << "| episodes=" << stats.episodeCount;
+    co_return stats;
+}
+
+QCoro::Task<int> MediaService::countItemsByType(QString includeItemTypes)
+{
+    // 参数按值传：协程的参数会被拷贝进 frame，用引用会悬垂
+    //（项目在 searchaggregator 上踩过这个坑）。
+    const ServerProfile profile = m_serverManager->activeProfile();
+
+    // Limit=1：只要服务端把 TotalRecordCount 带回来，不真去取条目。
+    const QString path =
+        QStringLiteral("/Users/%1/Items?Recursive=true&IncludeItemTypes=%2"
+                       "&Limit=1&EnableTotalRecordCount=true")
+            .arg(profile.userId, includeItemTypes);
+
+    const QJsonObject response =
+        co_await m_serverManager->activeClient()->get(path, 20000);
+    co_return response.value(QStringLiteral("TotalRecordCount")).toInt();
+}
+
 void MediaService::clearUserViewsCache()
 {
     m_userViewsCache.clear();

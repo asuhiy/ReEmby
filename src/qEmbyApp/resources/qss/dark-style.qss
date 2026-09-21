@@ -6785,3 +6785,145 @@ QLabel#scoped-title {
 #scoped-grid {
     background-color: transparent;
 }
+
+/* ────────────────────────── 选择图标对话框 ────────────────────────── */
+
+/* 当前图标源的说明行（内容来自图标源 JSON 的 description） */
+QLabel#icon-source-description {
+    color: #94A3B8;
+    font-size: 12px;
+}
+
+QPushButton#icon-add-source-btn {
+    background: transparent;
+    border: none;
+    color: #60A5FA;
+    font-size: 13px;
+    padding: 4px 2px;
+}
+
+QPushButton#icon-add-source-btn:hover {
+    color: #93C5FD;
+}
+
+/* 源选项「⋮」：默认透明，悬停才浮出底色 */
+QPushButton#icon-source-menu-btn {
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 0px;
+}
+
+QPushButton#icon-source-menu-btn:hover {
+    background-color: #334155;
+}
+
+QPushButton#icon-source-menu-btn:pressed {
+    background-color: #475569;
+}
+
+/* 图标网格：背景透明；选中用蓝色描边（对齐参考图的做法） */
+QListWidget#icon-grid {
+    background: transparent;
+    border: none;
+    outline: none;
+}
+
+QListWidget#icon-grid::item {
+    /* 先用透明边框占位：选中时才加边框，格子不会因此抖动 */
+    border: 1px solid transparent;
+    border-radius: 10px;
+    color: #CBD5E1;
+    font-size: 12px;
+    padding: 6px 2px;
+}
+
+QListWidget#icon-grid::item:hover {
+    background-color: rgba(148, 163, 184, 0.10);
+    border-color: rgba(148, 163, 184, 0.28);
+}
+
+QListWidget#icon-grid::item:selected {
+    background-color: rgba(59, 130, 246, 0.16);
+    border-color: #3B82F6;
+    color: #F8FAFC;
+}
+
+QLabel#icon-status-label {
+    color: #94A3B8;
+    font-size: 13px;
+}
+
+QPushButton#icon-retry-btn {
+    background-color: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 8px;
+    color: #E2E8F0;
+    font-size: 13px;
+    padding: 5px 18px;
+}
+
+QPushButton#icon-retry-btn:hover {
+    background-color: rgba(255, 255, 255, 0.10);
+}
+
+/* 网格滚动条：全局那套手柄实际只有 2px、基本看不见，这里显式给一套可见的。
+   必须用 ID 直选器并显式写 handle 的 margin，否则会被全局规则压扁。 */
+QScrollBar#iconGridScrollBar:vertical {
+    background: transparent;
+    border: none;
+    width: 10px;
+    margin: 2px 0px;
+}
+
+QScrollBar#iconGridScrollBar::handle:vertical {
+    background: rgba(148, 163, 184, 0.45);
+    border-radius: 3px;
+    min-height: 30px;
+    margin: 0px 1px;
+}
+
+QScrollBar#iconGridScrollBar::handle:vertical:hover,
+QScrollBar#iconGridScrollBar::handle:vertical:pressed {
+    background: rgba(148, 163, 184, 0.70);
+}
+
+QScrollBar#iconGridScrollBar::add-line:vertical,
+QScrollBar#iconGridScrollBar::sub-line:vertical,
+QScrollBar#iconGridScrollBar::add-page:vertical,
+QScrollBar#iconGridScrollBar::sub-page:vertical {
+    background: transparent;
+    border: none;
+    height: 0px;
+}
+
+/* 「确认」在没选图标时是禁用的。dialog-btn-primary 写死了蓝底，不补这条
+   会显示成"可点击"的蓝按钮，误导用户。 */
+QPushButton#dialog-btn-primary:disabled {
+    background-color: rgba(59, 130, 246, 0.28);
+    color: rgba(255, 255, 255, 0.50);
+}
+
+/* ────────────────────────── 媒体库信息对话框 ────────────────────────── */
+
+QWidget#library-stat-card {
+    background-color: #1E293B;
+    border-radius: 10px;
+}
+
+QLabel#library-stat-title {
+    color: #E2E8F0;
+    font-size: 14px;
+}
+
+QLabel#library-stat-value {
+    color: #60A5FA;
+    font-size: 19px;
+    font-weight: 600;
+}
+
+QLabel#library-info-status {
+    color: #94A3B8;
+    font-size: 12px;
+    padding: 2px 4px;
+}

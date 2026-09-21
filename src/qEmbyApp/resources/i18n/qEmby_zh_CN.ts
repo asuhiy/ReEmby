@@ -289,6 +289,14 @@ Error: </source>
         <translation>更多</translation>
     </message>
     <message>
+        <source>Change Icon</source>
+        <translation>更换图标</translation>
+    </message>
+    <message>
+        <source>Library Info</source>
+        <translation>媒体库信息</translation>
+    </message>
+    <message>
         <source>Move Up</source>
         <translation>上移</translation>
     </message>
@@ -10580,6 +10588,116 @@ This cannot be undone.</source>
     <message>
         <source>(%1)</source>
         <translation>(%1)</translation>
+    </message>
+</context>
+<context>
+    <name>IconPickerDialog</name>
+    <message>
+        <source>Add</source>
+        <translation>添加</translation>
+    </message>
+    <message>
+        <source>Add Icon Source</source>
+        <translation>添加图标源</translation>
+    </message>
+    <message>
+        <source>Cancel</source>
+        <translation>取消</translation>
+    </message>
+    <message>
+        <source>Choose Icon</source>
+        <translation>选择图标</translation>
+    </message>
+    <message>
+        <source>Confirm</source>
+        <translation>确定</translation>
+    </message>
+    <message>
+        <source>Delete</source>
+        <translation>删除</translation>
+    </message>
+    <message>
+        <source>Delete Icon Source</source>
+        <translation>删除图标源</translation>
+    </message>
+    <message>
+        <source>Failed to download this icon.</source>
+        <translation>图标下载失败。</translation>
+    </message>
+    <message>
+        <source>Failed to load this icon source.</source>
+        <translation>图标源加载失败。</translation>
+    </message>
+    <message>
+        <source>Icon source JSON URL</source>
+        <translation>图标源 JSON 地址</translation>
+    </message>
+    <message>
+        <source>Icon source options</source>
+        <translation>图标源选项</translation>
+    </message>
+    <message>
+        <source>Loading icon source...</source>
+        <translation>正在获取图标源…</translation>
+    </message>
+    <message>
+        <source>No icon source available.</source>
+        <translation>没有可用的图标源。</translation>
+    </message>
+    <message>
+        <source>Please pick an icon first.</source>
+        <translation>请先选择一个图标。</translation>
+    </message>
+    <message>
+        <source>Remove "%1" from the icon source list?</source>
+        <translation>要从图标源列表里移除「%1」吗？</translation>
+    </message>
+    <message>
+        <source>Retry</source>
+        <translation>重试</translation>
+    </message>
+    <message>
+        <source>Search icons...</source>
+        <translation>搜索图标…</translation>
+    </message>
+    <message>
+        <source>This address is invalid, or the source already exists.</source>
+        <translation>地址无效，或该图标源已存在。</translation>
+    </message>
+    <message>
+        <source>Use Default Icon</source>
+        <translation>使用默认图标</translation>
+    </message>
+</context>
+<context>
+    <name>LibraryInfoDialog</name>
+    <message>
+        <source>Close</source>
+        <translation>关闭</translation>
+    </message>
+    <message>
+        <source>Episodes</source>
+        <translation>剧集</translation>
+    </message>
+    <message>
+        <source>Library Info</source>
+        <translation>媒体库信息</translation>
+    </message>
+    <message>
+        <source>Loading...</source>
+        <translation>正在获取…</translation>
+    </message>
+    <message>
+        <source>Movies</source>
+        <translation>电影</translation>
+    </message>
+    <message>
+        <source>Refresh</source>
+        <translation>刷新</translation>
+    </message>
+    <message>
+        <source>TV Shows</source>
+        <translation>电视剧</translation>
     </message>
 </context>
 </TS>
