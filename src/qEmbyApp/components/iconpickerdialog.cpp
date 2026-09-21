@@ -8,6 +8,7 @@
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QIcon>
+#include <QImage>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
@@ -21,6 +22,8 @@
 #include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QtConcurrent/QtConcurrent>
+#include <qcorofuture.h>
 #include <qcorotask.h>
 
 #include <utility>
@@ -32,8 +35,11 @@ constexpr int kIconSize = 64;
 constexpr int kCellWidth = 94;
 constexpr int kCellHeight = 104;
 
-// 同时进行的图标下载数。一个源有 500+ 张图，全部并发会把连接数和内存打满。
-constexpr int kMaxConcurrentIconLoads = 4;
+// 同时进行的图标下载数。一个源有 500+ 张图，全部并发会把连接数和内存打满；
+// 但 4 又明显喂不饱带宽（单张 2–60KB、一屏 20 张），实测是加载慢的主因。
+// 8 是在"吃满带宽"和"不把连接数打满"之间取的折中（HTTP/2 已开，见
+// IconPackService::buildRequest 的 Http2AllowedAttribute）。
+constexpr int kMaxConcurrentIconLoads = 8;
 
 // 滚动时 valueChanged 触发很密，攒一下再算可见区。
 constexpr int kLoadDebounceMs = 60;
@@ -460,7 +466,43 @@ void IconPickerDialog::pumpIconQueue()
 void IconPickerDialog::onIconDownloaded(int row, quint64 generation,
                                         const QByteArray &data)
 {
-    // 必须无条件递减：换源时旧回调会被 generation 挡掉，若在这里才递减，
+    // 下载回来只是拿到了 PNG 字节，解码 + 缩放不能留在主线程：单张 58KB 的图
+    // 解码加平滑缩放要 1–3ms，一屏 20 张就是几十毫秒的阻塞，快速滚动时累起来
+    // 就是"界面发涩"。这里照抄项目图片流水线（MediaService 的取图流程）的写法
+    // ——QtConcurrent 后台解码，回主线程才转 QPixmap。
+    QCoro::connect(decodeIconAsync(row, generation, data), this, []() {});
+}
+
+QCoro::Task<void> IconPickerDialog::decodeIconAsync(int row, quint64 generation,
+                                                    QByteArray data)
+{
+    QPointer<IconPickerDialog> guard(this);
+
+    QImage image = co_await QtConcurrent::run([data = std::move(data)]() -> QImage {
+        if (data.isEmpty()) {
+            return QImage();
+        }
+        QImage decoded;
+        if (!decoded.loadFromData(data)) {
+            return QImage();
+        }
+        // 两阶段缩放：先把大图快速收到 2 倍目标尺寸，再平滑收到目标。
+        // 图标原图常见 256×256，直接 SmoothTransformation 缩到 64 是纯浪费
+        // （平滑插值的工作量按目标像素数算，先砍掉 3/4 的边长再平滑快得多）。
+        constexpr int kPrescale = kIconSize * 2;
+        if (decoded.width() > kPrescale || decoded.height() > kPrescale) {
+            decoded = decoded.scaled(kPrescale, kPrescale, Qt::KeepAspectRatio,
+                                     Qt::FastTransformation);
+        }
+        return decoded.scaled(kIconSize, kIconSize, Qt::KeepAspectRatio,
+                              Qt::SmoothTransformation);
+    });
+
+    if (!guard) {
+        co_return;  // 对话框已关，别再碰任何成员
+    }
+
+    // 必须无条件递减：换源时旧结果会被 generation 挡掉，若只在那时才递减，
     // 计数就会永久泄漏，之后一张图都加载不出来。
     if (m_activeLoads > 0) {
         --m_activeLoads;
@@ -469,11 +511,9 @@ void IconPickerDialog::onIconDownloaded(int row, quint64 generation,
     if (generation == m_generation) {
         QListWidgetItem *item = m_grid->item(row);
         if (item) {
-            QPixmap pixmap;
-            if (!data.isEmpty() && pixmap.loadFromData(data)) {
-                item->setIcon(QIcon(pixmap.scaled(
-                    kIconSize, kIconSize, Qt::KeepAspectRatio,
-                    Qt::SmoothTransformation)));
+            if (!image.isNull()) {
+                // QPixmap 只能在 GUI 线程构造，所以转换放在这里而不是后台。
+                item->setIcon(QIcon(QPixmap::fromImage(image)));
             }
             // 失败也标记成已处理，避免滚动来回时反复请求同一张坏图。
             item->setData(kIconLoadedRole, true);

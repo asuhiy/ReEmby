@@ -10,6 +10,7 @@
 #include <QQueue>
 #include <QSet>
 #include <QString>
+#include <qcorotask.h>
 
 class QComboBox;
 class QLabel;
@@ -61,6 +62,9 @@ private:
     void enqueueIcon(int row);
     void pumpIconQueue();
     void onIconDownloaded(int row, quint64 generation, const QByteArray &data);
+    // 下载回来之后的下半程：后台线程解码 + 缩放，回主线程套到格子上。
+    // 参数按值传 —— 协程的参数会被拷进 frame，用引用会悬垂。
+    QCoro::Task<void> decodeIconAsync(int row, quint64 generation, QByteArray data);
 
     void applyFilter(const QString &keyword);
 
