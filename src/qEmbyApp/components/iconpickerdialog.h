@@ -7,7 +7,6 @@
 
 #include <QByteArray>
 #include <QList>
-#include <QQueue>
 #include <QSet>
 #include <QString>
 #include <qcorotask.h>
@@ -59,7 +58,6 @@ private:
 
     void scheduleIconLoads();
     void requestVisibleIcons();
-    void enqueueIcon(int row);
     void pumpIconQueue();
     void onIconDownloaded(int row, quint64 generation, const QByteArray &data);
     // 下载回来之后的下半程：后台线程解码 + 缩放，回主线程套到格子上。
@@ -94,9 +92,11 @@ private:
 
     // 切换图标源时自增，用来丢弃上一个源还没回来的网络回调。
     quint64 m_generation = 0;
-    // 已经排过队的行号，避免滚动时对同一格重复请求。
+    // 「已入队或已加载」的行号，防止重复排队。
     QSet<int> m_requestedRows;
-    QQueue<int> m_iconQueue;
+    // 待下载的格子。打开某个图标源时**整源一次性入队**（全量补齐），
+    // 可见区由 requestVisibleIcons() 插队到最前 —— 用户滚到哪，哪先出图。
+    QList<int> m_pendingRows;
     int m_activeLoads = 0;
 
     QByteArray m_selectedData;

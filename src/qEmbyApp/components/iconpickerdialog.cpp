@@ -288,7 +288,7 @@ void IconPickerDialog::loadSource(int index)
     // 换源等于换一批格子：清空网格与懒加载状态。正在飞的旧请求由
     // generation 丢弃（回调里仍会递减 m_activeLoads，见 onIconDownloaded）。
     m_requestedRows.clear();
-    m_iconQueue.clear();
+    m_pendingRows.clear();
     m_selectedData.clear();
     m_selectedUrl.clear();
     m_defaultIconRequested = false;
@@ -354,6 +354,18 @@ void IconPickerDialog::applyPack(const IconPack &pack)
     }
     m_grid->setUpdatesEnabled(true);
 
+    // 全量补齐：整个图标源的格子一次性排进队列，可见区稍后由
+    // requestVisibleIcons() 插队到最前。这样滚到哪都能立刻出图，不必等
+    // "滚到了才开始下"；代价是首次打开会把整源下完（约 28MB）—— 走磁盘
+    // 缓存，第二次打开基本免费。
+    m_requestedRows.clear();
+    m_pendingRows.clear();
+    m_pendingRows.reserve(m_grid->count());
+    for (int row = 0; row < m_grid->count(); ++row) {
+        m_requestedRows.insert(row);
+        m_pendingRows.append(row);
+    }
+
     m_stack->setCurrentIndex(0);
     m_grid->scrollToTop();
     scheduleIconLoads();
@@ -394,57 +406,59 @@ void IconPickerDialog::requestVisibleIcons()
     first = qMax(0, first - perRow * kPrefetchRows);
     last = qMin(m_grid->count() - 1, last + perRow * kPrefetchRows);
 
-    // 快速滚动时，每经过一屏都会往队列里塞一批 —— 一路拖到底就会积压几百个
-    // 请求，而用户早就看不见那些格子了。把它们丢掉、只留当前可见区的，
-    // 否则主线程会一直忙于下载 / 解码已经滚过去的图标，表现为界面卡住无响应。
+    // 全量补齐 + 可见优先：队列里本来就排着整个源，这里只把可见区那几行
+    // 提到队首，让它们先下载 —— 用户滚到哪，哪就先出图。滚过去的格子
+    // 留在队里（不再丢弃），所以不会出现"回头一看还是空白"的情况。
     //
-    // 搜索也靠这里受益：被 setHidden 的非匹配项不在可见区，会被一并清出队列，
-    // 于是匹配结果自然排在前面、优先加载。
-    if (!m_iconQueue.isEmpty()) {
-        QQueue<int> visibleOnly;
-        while (!m_iconQueue.isEmpty()) {
-            const int queued = m_iconQueue.dequeue();
-            if (queued >= first && queued <= last) {
-                visibleOnly.enqueue(queued);
-            } else {
-                // 允许以后滚回来时重新请求（磁盘缓存会让重下几乎免费）。
-                m_requestedRows.remove(queued);
-            }
+    // 倒序遍历是为了配合 prepend：这样队首最终仍是"从上到下"的顺序。
+    for (int row = last; row >= first; --row) {
+        if (m_pendingRows.isEmpty()) {
+            break;
         }
-        m_iconQueue = visibleOnly;
-    }
-
-    for (int row = first; row <= last; ++row) {
-        enqueueIcon(row);
-    }
-    pumpIconQueue();
-}
-
-void IconPickerDialog::enqueueIcon(int row)
-{
-    QListWidgetItem *item = m_grid->item(row);
-    // 搜索过滤掉的格子不占位，自然也不会进入可见区。
-    if (!item || item->isHidden()) {
-        return;
-    }
-    if (item->data(kIconLoadedRole).toBool()) {
-        return;
-    }
-    if (m_requestedRows.contains(row)) {
-        return;
-    }
-    m_requestedRows.insert(row);
-    m_iconQueue.enqueue(row);
-}
-
-void IconPickerDialog::pumpIconQueue()
-{
-    while (m_activeLoads < kMaxConcurrentIconLoads && !m_iconQueue.isEmpty()) {
-        const int row = m_iconQueue.dequeue();
         QListWidgetItem *item = m_grid->item(row);
         if (!item || item->data(kIconLoadedRole).toBool()) {
             continue;
         }
+        const int at = m_pendingRows.indexOf(row);
+        if (at > 0) {
+            m_pendingRows.move(at, 0);
+        } else if (at < 0 && !m_requestedRows.contains(row)) {
+            m_requestedRows.insert(row);
+            m_pendingRows.prepend(row);
+        }
+    }
+
+    pumpIconQueue();
+}
+
+void IconPickerDialog::pumpIconQueue()
+{
+    while (m_activeLoads < kMaxConcurrentIconLoads && !m_pendingRows.isEmpty()) {
+        // 从队首找第一个真正该下载的：
+        //  · 已加载 / 格子已不存在 -> 直接从队列剔除（不再需要）
+        //  · 被搜索过滤隐藏的     -> 跳过但留在队列里（清空搜索后还要用）
+        int pick = -1;
+        for (int i = 0; i < m_pendingRows.size(); ++i) {
+            const int candidate = m_pendingRows.at(i);
+            QListWidgetItem *candidateItem = m_grid->item(candidate);
+            if (!candidateItem || candidateItem->data(kIconLoadedRole).toBool()) {
+                m_pendingRows.removeAt(i);
+                --i;
+                continue;
+            }
+            if (candidateItem->isHidden()) {
+                continue;
+            }
+            pick = i;
+            break;
+        }
+        if (pick < 0) {
+            // 队列里剩下的全被搜索过滤掉了，等搜索条件变化再说。
+            break;
+        }
+
+        const int row = m_pendingRows.takeAt(pick);
+        QListWidgetItem *item = m_grid->item(row);
         const QString url = item->data(kIconUrlRole).toString();
         if (url.isEmpty()) {
             continue;
