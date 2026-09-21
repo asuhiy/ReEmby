@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.19)
 
-project(ReEmby VERSION 0.10.3 LANGUAGES CXX)
+project(ReEmby VERSION 0.11.0 LANGUAGES CXX)
 
 # Capture the build commit short hash at configure time so the resulting
 # binary self-identifies which commit it was built from. Lets users verify

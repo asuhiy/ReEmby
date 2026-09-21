@@ -33,7 +33,7 @@ QString platformLabel()
 } // namespace
 
 // 默认客户端身份 = ReEmby 自己的名字 + 当前构建版本（APP_VERSION），
-// 形如 "ReEmby/0.10.3 (Windows NT 10.0.26100; x64)"。服务器端会看到
+// 形如 "ReEmby/0.11.0 (Windows NT 10.0.26100; x64)"。服务器端会看到
 // Client="ReEmby"、Version=<版本号>（不再伪装成第三方播放器）。
 QString ServerProfile::defaultUserAgent()
 {

@@ -689,7 +689,7 @@ void LoginView::setupAddPage() {
   m_userAgentInput->setToolTip(tr(
       "Present this User-Agent to this server for API and streaming "
       "requests. Useful when the server only allows specific players, "
-      "e.g. \"ReEmby/0.10.3 (Windows NT 10.0.26100; x64)\""));
+      "e.g. \"ReEmby/0.11.0 (Windows NT 10.0.26100; x64)\""));
   m_userAgentInput->setVisible(false);
   connect(m_userAgentInput, &QLineEdit::returnPressed, this,
           &LoginView::onLoginClicked);

@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src/qEmbyApp/resources/svg/qemby_logo.svg?v=0.10.3" width="120" alt="ReEmby Logo"/>
+  <img src="src/qEmbyApp/resources/svg/qemby_logo.svg?v=0.11.0" width="120" alt="ReEmby Logo"/>
 </p>
 
 <h1 align="center">ReEmby</h1>

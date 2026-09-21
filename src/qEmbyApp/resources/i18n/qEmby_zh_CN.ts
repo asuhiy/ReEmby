@@ -85,8 +85,8 @@ Release notes:
         <translation>自定义 User-Agent（可选，用于严格限制的服务器）</translation>
     </message>
     <message>
-        <source>Present this User-Agent to this server for API and streaming requests. Useful when the server only allows specific players, e.g. "ReEmby/0.10.3 (Windows NT 10.0.26100; x64)"</source>
-        <translation>向该服务器发送 API 与流媒体请求时使用此 User-Agent。当服务器只允许特定播放器时很有用，例如 "ReEmby/0.10.3 (Windows NT 10.0.26100; x64)"</translation>
+        <source>Present this User-Agent to this server for API and streaming requests. Useful when the server only allows specific players, e.g. "ReEmby/0.11.0 (Windows NT 10.0.26100; x64)"</source>
+        <translation>向该服务器发送 API 与流媒体请求时使用此 User-Agent。当服务器只允许特定播放器时很有用，例如 "ReEmby/0.11.0 (Windows NT 10.0.26100; x64)"</translation>
     </message>
     <message>
         <source>Select Server</source>
@@ -2221,8 +2221,8 @@ Continue from there?</source>
         <translation>API 与流媒体请求的全局默认 UA。对客户端白名单严格的服务器可能会拒绝默认 UA；登录表单中设置的每服务器 UA 优先。</translation>
     </message>
     <message>
-        <source>e.g. ReEmby/0.10.3 (Windows NT 10.0.26100; x64)</source>
-        <translation>例如 ReEmby/0.10.3 (Windows NT 10.0.26100; x64)</translation>
+        <source>e.g. ReEmby/0.11.0 (Windows NT 10.0.26100; x64)</source>
+        <translation>例如 ReEmby/0.11.0 (Windows NT 10.0.26100; x64)</translation>
     </message>
     <message>
         <source>Data Directory</source>

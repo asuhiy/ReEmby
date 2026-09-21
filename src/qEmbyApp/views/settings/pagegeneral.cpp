@@ -156,7 +156,7 @@ PageGeneral::PageGeneral(QEmbyCore *core, QWidget *parent)
   {
     auto *uaEdit = new QLineEdit(this);
     uaEdit->setPlaceholderText(
-        tr("e.g. ReEmby/0.10.3 (Windows NT 10.0.26100; x64)"));
+        tr("e.g. ReEmby/0.11.0 (Windows NT 10.0.26100; x64)"));
     uaEdit->setMinimumWidth(280);
     uaEdit->setClearButtonEnabled(true);
     uaEdit->setText(ConfigStore::instance()->get<QString>(
