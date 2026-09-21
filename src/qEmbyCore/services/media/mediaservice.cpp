@@ -570,18 +570,28 @@ QCoro::Task<QList<MediaItem>> MediaService::getUserViews(bool includeHidden)
     co_return views;
 }
 
-QCoro::Task<LibraryStats> MediaService::getLibraryStats()
+QCoro::Task<LibraryStats> MediaService::getLibraryStats(QString serverId)
 {
     LibraryStats stats;
-    try {
-        ensureValidProfile();
-    } catch (const std::exception &e) {
-        // 未登录 / 会话失效：把原因交回 UI 显示，不在这里弹窗。
-        stats.errorMessage = QString::fromUtf8(e.what());
+
+    // 这里刻意不走 ensureValidProfile()：它检查的是"活动服务器"，而在登录页
+    // 从服务器列表点进来时可能根本没有活动服务器（用户只是点了菜单，并未登录
+    // 那一台），会把这种场景误报成"未登录"。
+    const ServerProfile profile = resolveProfile(serverId);
+    if (!profile.isValid()) {
+        // isValid() 只看 accessToken ⇒ 这台还没有可用的登录会话。
+        stats.errorMessage =
+            tr("This server is not signed in. Please sign in first.");
         co_return stats;
     }
 
-    const ServerProfile profile = m_serverManager->activeProfile();
+    // 指定了 serverId 就不能借用 activeClient()（那可能是另一台的连接），
+    // 现建一个 —— 与 getSeasons / getResumeItems 等跨服调用同一套做法。
+    // 构造函数只存 profile + network 两个成员，开销可忽略。
+    ApiClient scopedClient(profile, m_serverManager->network());
+    ApiClient *client = (serverId.isEmpty() && m_serverManager->activeClient())
+                            ? m_serverManager->activeClient()
+                            : &scopedClient;
 
     // 大库的计数也要遍历元数据，给足 20s。
     constexpr int kStatsTimeoutMs = 20000;
@@ -603,6 +613,7 @@ QCoro::Task<LibraryStats> MediaService::getLibraryStats()
             stats.episodeCount =
                 response.value(QStringLiteral("EpisodeCount")).toInt();
             qDebug() << "[MediaService] getLibraryStats via /Items/Counts"
+                     << "| serverId=" << profile.id
                      << "| movies=" << stats.movieCount
                      << "| series=" << stats.seriesCount
                      << "| episodes=" << stats.episodeCount;
@@ -618,29 +629,34 @@ QCoro::Task<LibraryStats> MediaService::getLibraryStats()
     // ② 回退：按类型分别取 TotalRecordCount。三个请求都很轻（只回计数），
     //    URL 形状与项目其它 /Users/<id>/Items 调用完全一致，确定性最高。
     try {
-        stats.movieCount = co_await countItemsByType(QStringLiteral("Movie"));
-        stats.seriesCount = co_await countItemsByType(QStringLiteral("Series"));
+        stats.movieCount =
+            co_await countItemsByType(QStringLiteral("Movie"), serverId);
+        stats.seriesCount =
+            co_await countItemsByType(QStringLiteral("Series"), serverId);
         stats.episodeCount =
-            co_await countItemsByType(QStringLiteral("Episode"));
+            co_await countItemsByType(QStringLiteral("Episode"), serverId);
     } catch (const std::exception &e) {
         stats.errorMessage = QString::fromUtf8(e.what());
         qWarning() << "[MediaService] getLibraryStats failed"
+                   << "| serverId=" << profile.id
                    << "| error=" << stats.errorMessage;
         co_return stats;
     }
 
     qDebug() << "[MediaService] getLibraryStats via per-type count"
+             << "| serverId=" << profile.id
              << "| movies=" << stats.movieCount
              << "| series=" << stats.seriesCount
              << "| episodes=" << stats.episodeCount;
     co_return stats;
 }
 
-QCoro::Task<int> MediaService::countItemsByType(QString includeItemTypes)
+QCoro::Task<int> MediaService::countItemsByType(QString includeItemTypes,
+                                                QString serverId)
 {
     // 参数按值传：协程的参数会被拷贝进 frame，用引用会悬垂
     //（项目在 searchaggregator 上踩过这个坑）。
-    const ServerProfile profile = m_serverManager->activeProfile();
+    const ServerProfile profile = resolveProfile(serverId);
 
     // Limit=1：只要服务端把 TotalRecordCount 带回来，不真去取条目。
     const QString path =
@@ -648,8 +664,13 @@ QCoro::Task<int> MediaService::countItemsByType(QString includeItemTypes)
                        "&Limit=1&EnableTotalRecordCount=true")
             .arg(profile.userId, includeItemTypes);
 
-    const QJsonObject response =
-        co_await m_serverManager->activeClient()->get(path, 20000);
+    // 与 getLibraryStats 同样的跨服处理：指定 serverId 时现建 client。
+    ApiClient scopedClient(profile, m_serverManager->network());
+    ApiClient *client = (serverId.isEmpty() && m_serverManager->activeClient())
+                            ? m_serverManager->activeClient()
+                            : &scopedClient;
+
+    const QJsonObject response = co_await client->get(path, 20000);
     co_return response.value(QStringLiteral("TotalRecordCount")).toInt();
 }
 

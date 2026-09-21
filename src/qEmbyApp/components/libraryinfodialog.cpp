@@ -2,7 +2,9 @@
 
 #include "modernmessagebox.h"
 
+#include <models/profile/serverprofile.h>
 #include <qembycore.h>
+#include <services/manager/servermanager.h>
 #include <services/media/mediaservice.h>
 
 #include <QHBoxLayout>
@@ -51,9 +53,11 @@ QWidget *createStatCard(const QString &title, QLabel **valueOut,
 
 }  // namespace
 
-LibraryInfoDialog::LibraryInfoDialog(QEmbyCore *core, QWidget *parent)
+LibraryInfoDialog::LibraryInfoDialog(QEmbyCore *core, const QString &serverId,
+                                     QWidget *parent)
     : ModernDialogBase(parent)
     , m_core(core)
+    , m_serverId(serverId)
 {
     setupUi();
 }
@@ -65,6 +69,23 @@ void LibraryInfoDialog::setupUi()
 
     QVBoxLayout *root = contentLayout();
     root->setSpacing(8);
+
+    // 这些数字完全取决于"查的是哪台服务器"，所以把它的名字标出来 ——
+    // 服务器列表里出现重名条目时（用户就有两台都叫"解忧杂货铺"），
+    // 不标就无法判断数字属于谁。
+    if (m_core && m_core->serverManager()) {
+        const QList<ServerProfile> servers = m_core->serverManager()->servers();
+        for (const ServerProfile &server : servers) {
+            if (server.id != m_serverId) {
+                continue;
+            }
+            auto *nameLabel = new QLabel(server.name, this);
+            nameLabel->setObjectName("library-info-server");
+            nameLabel->setAlignment(Qt::AlignCenter);
+            root->addWidget(nameLabel);
+            break;
+        }
+    }
 
     root->addWidget(createStatCard(tr("Movies"), &m_movieValue, this));
     root->addWidget(createStatCard(tr("TV Shows"), &m_seriesValue, this));
@@ -124,7 +145,7 @@ void LibraryInfoDialog::reload()
     setValueLabel(m_episodeValue, 0, false);
 
     QPointer<LibraryInfoDialog> guard(this);
-    QCoro::connect(m_core->mediaService()->getLibraryStats(), this,
+    QCoro::connect(m_core->mediaService()->getLibraryStats(m_serverId), this,
                    [guard, generation](const LibraryStats &stats) {
         if (!guard || generation != guard->m_generation) {
             return;

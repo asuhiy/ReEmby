@@ -133,9 +133,13 @@ public:
     QCoro::Task<QList<MediaItem>> getUserViews(bool includeHidden = false);
     void clearUserViewsCache();
 
-    // 拉取当前服务器的内容统计（电影 / 电视剧 / 剧集的数量）。
+    // 拉取服务器的内容统计（电影 / 电视剧 / 剧集的数量）。
     // 失败（含未登录）时返回带 errorMessage 的结果，不抛异常 —— UI 要显示失败态。
-    QCoro::Task<LibraryStats> getLibraryStats();
+    //
+    // serverId 为空时用当前活动服务器（进主界面后的老行为）；
+    // 非空时解析指定服务器 —— 登录页的服务器列表就走这条，那里可能还没有
+    // "活动服务器"，直接用 activeProfile() 会误报"未登录"。
+    QCoro::Task<LibraryStats> getLibraryStats(QString serverId = QString());
 
     
     QCoro::Task<MediaQueryPage> getLibraryItemsPage(const QString& parentId, const QString& sortBy = "IsFolder,SortName", const QString& sortOrder = "Ascending", const QString& filters = "", const QString& includeItemTypes = "", int startIndex = 0, int limit = 50, bool recursive = false, bool includeChildCount = false);
@@ -293,7 +297,8 @@ private:
     void ensureValidProfile() const;
     // 按 Item 类型取总数。只要计数：Limit=1 让服务端把 TotalRecordCount 带回来，
     // 不拉条目（URL 形状与项目其它 /Items 调用一致）。
-    QCoro::Task<int> countItemsByType(QString includeItemTypes);
+    QCoro::Task<int> countItemsByType(QString includeItemTypes,
+                                      QString serverId = QString());
     QCoro::Task<MediaQueryPage> fetchItemPage(QString basePath,
                                               int startIndex, int limit,
                                               QString context,

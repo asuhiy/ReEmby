@@ -1422,6 +1422,10 @@ Choose a file, paste an image URL, or drag one onto the preview.</source>
         <source>Downloaded data is not a valid image</source>
         <translation>下载的数据不是有效的图像</translation>
     </message>
+    <message>
+        <source>This server is not signed in. Please sign in first.</source>
+        <translation>该服务器尚未登录，请先登录后再查看</translation>
+    </message>
 </context>
 
 <context>

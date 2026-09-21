@@ -150,9 +150,13 @@ private:
     // 打开「选择图标」对话框，把结果写进该服务器的 iconBase64
     //（选「使用默认图标」则清空，回落到内置图标）。
     void onChangeIconRequested(const QString& serverId);
-    // 打开「媒体库信息」。它是非模态的，所以留个引用来避免重复开窗。
-    void onLibraryInfoRequested();
+    // 打开「媒体库信息」（非模态，下面那个指针用来避免重复开窗）。
+    // serverId 必须是服务器列表里那一行 —— 登录页可能还没有活动服务器，
+    // 不传就会查错对象（甚至报"未登录"）。
+    void onLibraryInfoRequested(const QString& serverId);
     QPointer<QWidget> m_libraryInfoDialog;
+    // 当前对话框查的是哪台服务器：换一台要重建，别把上一台的数字给下一个人看。
+    QString m_libraryInfoServerId;
     // 把服务器移动到指定下标（越界由 ServerManager 夹取），
     // 并按 intent 决定重排后滚动条的落点。
     void moveServerTo(const QString& serverId, int newIndex,

@@ -27,7 +27,10 @@ class LibraryInfoDialog : public ModernDialogBase
     Q_OBJECT
 
 public:
-    explicit LibraryInfoDialog(QEmbyCore *core, QWidget *parent = nullptr);
+    // serverId 指向要查询的服务器（服务器列表里的那一行）。留空则查当前
+    // 活动服务器 —— 非空是关键：登录页点菜单时可能还没有活动服务器。
+    LibraryInfoDialog(QEmbyCore *core, const QString &serverId,
+                      QWidget *parent = nullptr);
 
 protected:
     void showEvent(QShowEvent *event) override;
@@ -40,6 +43,7 @@ private:
     void setValueLabel(QLabel *label, int value, bool valid);
 
     QEmbyCore *m_core = nullptr;
+    QString m_serverId;
 
     QLabel *m_movieValue = nullptr;
     QLabel *m_seriesValue = nullptr;

@@ -960,7 +960,7 @@ void LoginView::showServerMenu(const QString &serverId, QWidget *anchor) {
 
   QAction *libraryAction = menu.addAction(tr("Library Info"));
   connect(libraryAction, &QAction::triggered, this,
-          [this]() { onLibraryInfoRequested(); });
+          [this, serverId]() { onLibraryInfoRequested(serverId); });
 
   menu.addSeparator();
 
@@ -1029,21 +1029,27 @@ void LoginView::onChangeIconRequested(const QString &serverId) {
   rebuildServerRows(RowScrollIntent::Preserve);
 }
 
-void LoginView::onLibraryInfoRequested() {
-  // 非模态：已经开着就把它提到前面，不重复开窗。
-  if (m_libraryInfoDialog) {
+void LoginView::onLibraryInfoRequested(const QString &serverId) {
+  // 非模态：同一台已经开着就把它提到前面，不重复开窗。
+  if (m_libraryInfoDialog && m_libraryInfoServerId == serverId) {
     m_libraryInfoDialog->show();
     m_libraryInfoDialog->raise();
     m_libraryInfoDialog->activateWindow();
     return;
   }
+  // 换了一台：旧窗口里的数字属于上一台，必须换掉而不是复用。
+  if (m_libraryInfoDialog) {
+    m_libraryInfoDialog->close();
+    m_libraryInfoDialog = nullptr;
+  }
 
-  auto *dialog = new LibraryInfoDialog(m_core, this);
+  auto *dialog = new LibraryInfoDialog(m_core, serverId, this);
   dialog->setAttribute(Qt::WA_DeleteOnClose);
   dialog->show();
   dialog->raise();
   dialog->activateWindow();
   m_libraryInfoDialog = dialog;
+  m_libraryInfoServerId = serverId;
 }
 
 void LoginView::moveServerTo(const QString &serverId, int newIndex,

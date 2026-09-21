@@ -6992,3 +6992,10 @@ QLabel#library-info-status {
     font-size: 12px;
     padding: 2px 4px;
 }
+
+/* 这些数字属于哪台服务器 —— 服务器列表可能重名，必须标出来 */
+QLabel#library-info-server {
+    color: #64748B;
+    font-size: 12px;
+    padding-bottom: 2px;
+}
