@@ -74,8 +74,9 @@ private:
     QWidget* m_listPage;
     QWidget* m_addPage;
 
-    // 服务器列表页：QScrollArea 承载逐行服务器 + 底部固定的「添加新服务器」行。
-    // 显示不超过 kMaxVisibleServerRows 行，超出则滚动（见 rebuildServerRows）。
+    // 服务器列表页：面板（有边框的框）内放 QScrollArea，
+    // 逐行显示服务器；底部固定「添加新服务器」行。
+    QWidget* m_serverPanel = nullptr;
     QScrollArea* m_serverScroll = nullptr;
     QWidget* m_serverListContainer = nullptr;
     QVBoxLayout* m_serverListLayout = nullptr;

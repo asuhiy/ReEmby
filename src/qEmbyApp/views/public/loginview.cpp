@@ -23,6 +23,7 @@
 #include <QPointer>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QTimer>
@@ -36,25 +37,28 @@
 #include <services/manager/servermanager.h>
 
 namespace {
-// 列表页栅格（与设计稿一致）：行高 68、行距 10，最多 5 行可见。
+// 列表页栅格（与设计稿一致）：行高 68，最多 5 行可见。
+// 行改成扁平样式后不再靠空距分隔，改用 1px 分隔线（见 server-list-sep）。
 constexpr int kServerRowHeight = 68;
-constexpr int kServerRowSpacing = 10;
+constexpr int kServerRowSepHeight = 1;
 constexpr int kMaxVisibleServerRows = 5;
 // 列表页内容宽度；页宽 = 内容 + 左右各 32 的留白。
 constexpr int kServerListWidth = 536;
 constexpr int kServerListPadding = 32;
+constexpr int kServerListSpacing = 10;
+// 列表面板的内边距：给滚动条和行留一点呼吸空间，别贴着面板边框。
+constexpr int kServerPanelPadding = 6;
 constexpr int kAddServerRowHeight = 52;
 // 「连接服务器」表单页的宽度：页面整体是 600 宽，但表单保持原来的窄宽度居中。
 constexpr int kAddFormWidth = 360;
-// 一行里被固定部件占掉的宽度：左边距 16 + 图标 46 + 图标后间距 16 +
-// 末尾「⋮」按钮 28 + 右边距 12。剩下的宽度才留给服务器名 / 地址，
-// 用于提前做省略号（QLabel 自己不会 elide，超出只会硬裁）。
-constexpr int kServerRowChrome = 16 + 46 + 16 + 28 + 12;
-// 再留 16px 安全余量：行数超过 5 行时会出现垂直滚动条、占掉一点视口宽度，
-// 不留余量的话省略号又会紧贴着被二次裁掉。
-constexpr int kServerRowTextSlack = 16;
+// 一行里被固定部件占掉的宽度：左边距 12 + 图标 46 + 图标后间距 16 +
+// 末尾「⋯」按钮 28 + 右边距 12，再减去面板左右内边距与滚动条槽位。
+// 剩下的宽度才留给服务器名 / 地址，用于提前做省略号（QLabel 不会自己 elide）。
+constexpr int kServerRowChrome = 12 + 46 + 16 + 28 + 12;
+// 预留：面板内边距(左右各 6) + 垂直滚动条槽位 ≈ 10，再留一点余量。
+constexpr int kServerRowReserve = 12 + 10 + 16;
 constexpr int kServerRowTextWidth =
-    kServerListWidth - kServerRowChrome - kServerRowTextSlack;
+    kServerListWidth - kServerRowChrome - kServerRowReserve;
 }  // namespace
 
 // 服务器行内点击：行里的子控件（标签）不接受鼠标事件，会冒泡到行；
@@ -470,23 +474,37 @@ void LoginView::setupListPage() {
   layout->addSpacing(12);
 
   // 服务器逐行显示；超过 kMaxVisibleServerRows 行时由这里滚动。
-  m_serverScroll = new QScrollArea(this);
+  // 外面套一层「面板」：给列表一个可见边界，滚动条才有归属感
+  // （同时面板内改用扁平行，避免面板边框 + 每行卡片边框叠成双层框）。
+  m_serverPanel = new QWidget(this);
+  m_serverPanel->setObjectName("server-list-panel");
+  m_serverPanel->setAttribute(Qt::WA_StyledBackground, true);
+  auto *panelLayout = new QVBoxLayout(m_serverPanel);
+  panelLayout->setContentsMargins(kServerPanelPadding, kServerPanelPadding,
+                                  kServerPanelPadding, kServerPanelPadding);
+  panelLayout->setSpacing(0);
+
+  m_serverScroll = new QScrollArea(m_serverPanel);
   m_serverScroll->setObjectName("server-list-scroll");
   m_serverScroll->setFrameShape(QFrame::NoFrame);
   m_serverScroll->setWidgetResizable(true);
   m_serverScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   m_serverScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   m_serverScroll->viewport()->setAutoFillBackground(false);
+  // 全局 QScrollBar 样式只有 4px 宽 / 30% 不透明度，基本看不见。
+  // 用一个专用 objectName 给它单独的样式（必须用 ID 直选器，见 QSS 里的说明）。
+  m_serverScroll->verticalScrollBar()->setObjectName("serverPanelScrollBar");
 
   m_serverListContainer = new QWidget(m_serverScroll);
   m_serverListContainer->setObjectName("server-list-container");
   m_serverListLayout = new QVBoxLayout(m_serverListContainer);
   m_serverListLayout->setContentsMargins(0, 0, 0, 0);
-  m_serverListLayout->setSpacing(kServerRowSpacing);
+  m_serverListLayout->setSpacing(0);
   m_serverScroll->setWidget(m_serverListContainer);
 
-  layout->addWidget(m_serverScroll);
-  layout->addSpacing(kServerRowSpacing);
+  panelLayout->addWidget(m_serverScroll);
+  layout->addWidget(m_serverPanel);
+  layout->addSpacing(kServerListSpacing);
 
   // 「添加新服务器」固定在滚动区之外，服务器再多也始终可见。
   m_addServerBtn = new QPushButton(tr("Add New Server"), this);
@@ -730,22 +748,30 @@ void LoginView::rebuildServerRows() {
   }
 
   const QList<ServerProfile> servers = m_core->serverManager()->servers();
-  for (const auto &server : servers) {
-    m_serverListLayout->addWidget(createServerRow(server));
+  for (int i = 0; i < servers.size(); ++i) {
+    m_serverListLayout->addWidget(createServerRow(servers[i]));
+    // 行改名扁平行后不再靠空距分隔，改用 1px 分隔线（最后一行不加）。
+    if (i + 1 < servers.size()) {
+      auto *sep = new QFrame(m_serverListContainer);
+      sep->setObjectName("server-list-sep");
+      sep->setFrameShape(QFrame::NoFrame);
+      sep->setFixedHeight(kServerRowSepHeight);
+      m_serverListLayout->addWidget(sep);
+    }
   }
   m_serverListLayout->addStretch();
 
   //
   // 高度按行数收缩：不超过 kMaxVisibleServerRows 行时不滚动；超过则封顶，
-  // 多出来的行交给 QScrollArea（第 6 行只露一半，提示还能往下滚）。
+  // 多出来的行交给 QScrollArea 滚（滚动条本身即是"还能往下"的提示）。
   const int shown =
       qBound(0, static_cast<int>(servers.size()), kMaxVisibleServerRows);
   if (shown == 0) {
-    m_serverScroll->hide();
+    m_serverPanel->hide();
   } else {
     m_serverScroll->setFixedHeight(shown * kServerRowHeight +
-                                   (shown - 1) * kServerRowSpacing);
-    m_serverScroll->show();
+                                   (shown - 1) * kServerRowSepHeight);
+    m_serverPanel->show();
   }
 
   //
@@ -769,13 +795,16 @@ void LoginView::rebuildServerRows() {
 
 QWidget *LoginView::createServerRow(const ServerProfile &server) {
   auto *row = new QWidget(m_serverListContainer);
-  row->setObjectName("server-card");
+  row->setObjectName("server-list-row");
   row->setAttribute(Qt::WA_StyledBackground, true);
+  // 普通 QWidget 默认收不到 hover 事件，QSS 的 :hover 就不会生效
+  //（项目里 server-switcher-row 为此改用动态属性，这里直接开 WA_Hover 更省事）。
+  row->setAttribute(Qt::WA_Hover, true);
   row->setFixedHeight(kServerRowHeight);
   row->setCursor(Qt::PointingHandCursor);
 
   auto *rowLayout = new QHBoxLayout(row);
-  rowLayout->setContentsMargins(16, 0, 12, 0);
+  rowLayout->setContentsMargins(12, 0, 12, 0);
   rowLayout->setSpacing(0);
 
   auto *iconLabel = new QLabel(row);

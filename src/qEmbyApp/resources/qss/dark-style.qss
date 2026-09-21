@@ -597,21 +597,75 @@ QWidget#server-card:hover {
     border: 1px solid #475569;
 }
 
-/* 列表页容器：滚动区与内容都透明，让背景透出来 */
-QScrollArea#server-list-scroll {
-    background: transparent;
-    border: none;
+/* 服务器列表面板：给列表一个可见边界，滚动条才有"归属"感 */
+QWidget#server-list-panel {
+    background-color: #1A1D24;
+    border: 1px solid #334155;
+    border-radius: 12px;
 }
 
+/* 面板内滚动区与内容都透明，让面板底色透出来 */
+QScrollArea#server-list-scroll,
 QScrollArea#server-list-scroll > QWidget > QWidget {
     background: transparent;
+    border: none;
 }
 
 QWidget#server-list-container {
     background: transparent;
 }
 
-/* 行尾「⋮」：默认透明，悬停才浮出底色（图标由 C++ 按主题设置） */
+/* 面板内的滚动条。
+   必须用 ID 直选器（QScrollBar#...）并显式写 margin：全局 QScrollBar:vertical
+   只有 8px 轨道 + 30% 不透明度手柄（被 margin 挤到实际 4px 宽），基本看不见；
+   而 "QScrollArea#x QScrollBar::handle" 这种「后代 + 子控件」写法会被全局
+   QScrollBar::handle 的 margin 盖掉，压成不可见（项目里踩过）。 */
+QScrollBar#serverPanelScrollBar:vertical {
+    background: transparent;
+    border: none;
+    width: 10px;
+    margin: 2px 0px;
+}
+
+QScrollBar#serverPanelScrollBar::handle:vertical {
+    background: rgba(148, 163, 184, 0.45);
+    border-radius: 3px;
+    min-height: 30px;
+    margin: 0px 1px;
+}
+
+QScrollBar#serverPanelScrollBar::handle:vertical:hover,
+QScrollBar#serverPanelScrollBar::handle:vertical:pressed {
+    background: rgba(148, 163, 184, 0.70);
+}
+
+QScrollBar#serverPanelScrollBar::add-line:vertical,
+QScrollBar#serverPanelScrollBar::sub-line:vertical,
+QScrollBar#serverPanelScrollBar::add-page:vertical,
+QScrollBar#serverPanelScrollBar::sub-page:vertical {
+    background: transparent;
+    border: none;
+    height: 0px;
+}
+
+/* 面板内的行：扁平样式（无自身边框/圆角），悬停时整行亮起 */
+QWidget#server-list-row {
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+}
+
+QWidget#server-list-row:hover {
+    background-color: #232730;
+}
+
+/* 行间分隔线：扁平行不再靠空距区分 */
+QFrame#server-list-sep {
+    background-color: #262A33;
+    border: none;
+}
+
+/* 行尾「⋯」：默认透明，悬停才浮出底色（图标由 C++ 按主题设置） */
 QPushButton#server-menu-btn {
     background-color: transparent;
     border: none;

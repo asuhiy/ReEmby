@@ -607,21 +607,72 @@ QWidget#server-card:hover {
     border: 1px solid #D1D5DB;
 }
 
-/* 列表页容器：滚动区与内容都透明，让背景透出来 */
-QScrollArea#server-list-scroll {
-    background: transparent;
-    border: none;
+/* 服务器列表面板：给列表一个可见边界，滚动条才有"归属"感 */
+QWidget#server-list-panel {
+    background-color: #FFFFFF;
+    border: 1px solid #E5E7EB;
+    border-radius: 12px;
 }
 
+/* 面板内滚动区与内容都透明，让面板底色透出来 */
+QScrollArea#server-list-scroll,
 QScrollArea#server-list-scroll > QWidget > QWidget {
     background: transparent;
+    border: none;
 }
 
 QWidget#server-list-container {
     background: transparent;
 }
 
-/* 行尾「⋮」：默认透明，悬停才浮出底色（图标由 C++ 按主题设置） */
+/* 面板内的滚动条。必须用 ID 直选器并显式写 margin，
+   否则会被全局 QScrollBar::handle 的 margin 压成不可见（详见 dark 版说明）。 */
+QScrollBar#serverPanelScrollBar:vertical {
+    background: transparent;
+    border: none;
+    width: 10px;
+    margin: 2px 0px;
+}
+
+QScrollBar#serverPanelScrollBar::handle:vertical {
+    background: rgba(100, 116, 139, 0.45);
+    border-radius: 3px;
+    min-height: 30px;
+    margin: 0px 1px;
+}
+
+QScrollBar#serverPanelScrollBar::handle:vertical:hover,
+QScrollBar#serverPanelScrollBar::handle:vertical:pressed {
+    background: rgba(100, 116, 139, 0.70);
+}
+
+QScrollBar#serverPanelScrollBar::add-line:vertical,
+QScrollBar#serverPanelScrollBar::sub-line:vertical,
+QScrollBar#serverPanelScrollBar::add-page:vertical,
+QScrollBar#serverPanelScrollBar::sub-page:vertical {
+    background: transparent;
+    border: none;
+    height: 0px;
+}
+
+/* 面板内的行：扁平样式（无自身边框/圆角），悬停时整行亮起 */
+QWidget#server-list-row {
+    background-color: transparent;
+    border: none;
+    border-radius: 8px;
+}
+
+QWidget#server-list-row:hover {
+    background-color: #F3F4F6;
+}
+
+/* 行间分隔线：扁平行不再靠空距区分 */
+QFrame#server-list-sep {
+    background-color: #EEF0F3;
+    border: none;
+}
+
+/* 行尾「⋯」：默认透明，悬停才浮出底色（图标由 C++ 按主题设置） */
 QPushButton#server-menu-btn {
     background-color: transparent;
     border: none;
