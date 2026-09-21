@@ -124,6 +124,10 @@ void IconPickerDialog::setupUi()
     m_grid->setResizeMode(QListView::Adjust);
     m_grid->setMovement(QListView::Static);
     m_grid->setUniformItemSizes(true);
+    // 只对可见区域做布局。默认的 SinglePass 会在每次滚动时重算全部 item 的
+    // rect —— 一个源有 500+ 个格子，快速拖到底时这里会造成明显卡顿。
+    m_grid->setLayoutMode(QListView::Batched);
+    m_grid->setBatchSize(80);
     m_grid->setIconSize(QSize(kIconSize, kIconSize));
     m_grid->setGridSize(QSize(kCellWidth, kCellHeight));
     m_grid->setSpacing(0);
@@ -383,6 +387,26 @@ void IconPickerDialog::requestVisibleIcons()
     const int perRow = qMax(1, viewport.width() / kCellWidth);
     first = qMax(0, first - perRow * kPrefetchRows);
     last = qMin(m_grid->count() - 1, last + perRow * kPrefetchRows);
+
+    // 快速滚动时，每经过一屏都会往队列里塞一批 —— 一路拖到底就会积压几百个
+    // 请求，而用户早就看不见那些格子了。把它们丢掉、只留当前可见区的，
+    // 否则主线程会一直忙于下载 / 解码已经滚过去的图标，表现为界面卡住无响应。
+    //
+    // 搜索也靠这里受益：被 setHidden 的非匹配项不在可见区，会被一并清出队列，
+    // 于是匹配结果自然排在前面、优先加载。
+    if (!m_iconQueue.isEmpty()) {
+        QQueue<int> visibleOnly;
+        while (!m_iconQueue.isEmpty()) {
+            const int queued = m_iconQueue.dequeue();
+            if (queued >= first && queued <= last) {
+                visibleOnly.enqueue(queued);
+            } else {
+                // 允许以后滚回来时重新请求（磁盘缓存会让重下几乎免费）。
+                m_requestedRows.remove(queued);
+            }
+        }
+        m_iconQueue = visibleOnly;
+    }
 
     for (int row = first; row <= last; ++row) {
         enqueueIcon(row);
