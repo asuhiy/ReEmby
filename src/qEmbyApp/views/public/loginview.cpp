@@ -4,22 +4,24 @@
 #include "../../components/modernmessagebox.h"
 #include "../../components/modernswitch.h"
 #include "../../components/proxysettingsdialog.h"
-#include "../../components/serverwheelview.h"
 #include "../../components/webdavsyncdialog.h"
 #include <config/webdavprofilestore.h>
 #include <QAction>
 #include <QApplication>
 #include <QEvent>
 #include <QFont>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
 #include <QIntValidator>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QPixmap>
 #include <QPointer>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QStackedWidget>
 #include <QTimer>
@@ -32,44 +34,39 @@
 #include <services/auth/authservice.h>
 #include <services/manager/servermanager.h>
 
+namespace {
+// 列表页栅格（与设计稿一致）：行高 68、行距 10，最多 5 行可见。
+constexpr int kServerRowHeight = 68;
+constexpr int kServerRowSpacing = 10;
+constexpr int kMaxVisibleServerRows = 5;
+// 列表页内容宽度；页宽 = 内容 + 左右各 32 的留白。
+constexpr int kServerListWidth = 536;
+constexpr int kServerListPadding = 32;
+constexpr int kAddServerRowHeight = 52;
+// 「连接服务器」表单页的宽度：页面整体是 600 宽，但表单保持原来的窄宽度居中。
+constexpr int kAddFormWidth = 360;
+}  // namespace
 
-class CardEventFilter : public QObject {
+// 服务器行内点击：行里的子控件（标签）不接受鼠标事件，会冒泡到行；
+// 行尾的「⋮」按钮会自行消费事件，所以点它不会触发登录。
+class RowClickFilter : public QObject {
 public:
-  CardEventFilter(QWidget *actionContainer, std::function<void()> onClick,
-                  QObject *parent = nullptr)
-      : QObject(parent), m_actionContainer(actionContainer),
-        m_onClick(onClick) {}
+  RowClickFilter(std::function<void()> onClick, QObject *parent)
+      : QObject(parent), m_onClick(onClick) {}
 
 protected:
   bool eventFilter(QObject *obj, QEvent *event) override {
-    QWidget *card = static_cast<QWidget *>(obj);
-    
-    bool isDepthCard = card->property("isDepthCard").toBool();
-
-    if (event->type() == QEvent::Enter) {
-      
-      if (!isDepthCard)
-        m_actionContainer->show();
-    } else if (event->type() == QEvent::Leave) {
-      m_actionContainer->hide();
-    } else if (event->type() == QEvent::MouseButtonRelease) {
+    if (event->type() == QEvent::MouseButtonRelease) {
       auto *mouseEvent = static_cast<QMouseEvent *>(event);
       if (mouseEvent->button() == Qt::LeftButton) {
         m_onClick();
         return true;
       }
     }
-
-    
-    if (isDepthCard && m_actionContainer->isVisible()) {
-      m_actionContainer->hide();
-    }
-
     return QObject::eventFilter(obj, event);
   }
 
 private:
-  QWidget *m_actionContainer;
   std::function<void()> m_onClick;
 };
 
@@ -190,7 +187,8 @@ void LoginView::onThemeChanged(ThemeManager::Theme theme) {
   
   
   if (m_pageSwitcher->currentWidget() == m_listPage) {
-    refreshServerList();
+    // 行内的「⋮」图标要跟着主题换色；只重建行，不切页。
+    rebuildServerRows();
   }
 }
 
@@ -392,7 +390,7 @@ void LoginView::setupUi() {
   mainLayout->setContentsMargins(0, 0, 0, 8); 
 
   m_pageSwitcher = new QStackedWidget(this);
-  m_pageSwitcher->setFixedWidth(360);
+  m_pageSwitcher->setFixedWidth(kServerListWidth + kServerListPadding * 2);
 
   setupListPage();
   setupAddPage();
@@ -450,34 +448,64 @@ void LoginView::setupUi() {
 
 void LoginView::setupListPage() {
   m_listPage = new QWidget(this);
+  m_listPage->setObjectName("login-list-page");
   auto *layout = new QVBoxLayout(m_listPage);
-
-  
-  
-  
   layout->setSpacing(0);
-  layout->setContentsMargins(8, 8, 8, 8);
+  layout->setContentsMargins(kServerListPadding, 8, kServerListPadding, 8);
 
   auto *titleLabel = new QLabel(tr("Select Server"), this);
   titleLabel->setObjectName("login-title");
   titleLabel->setAlignment(Qt::AlignCenter);
   layout->addWidget(titleLabel);
-  layout->addSpacing(8);
+  layout->addSpacing(12);
 
-  
-  m_wheelView = new ServerWheelView(this);
-  
-  m_wheelView->setFixedSize(340, 220);
-  layout->addWidget(m_wheelView, 0, Qt::AlignHCenter);
+  // 服务器逐行显示；超过 kMaxVisibleServerRows 行时由这里滚动。
+  m_serverScroll = new QScrollArea(this);
+  m_serverScroll->setObjectName("server-list-scroll");
+  m_serverScroll->setFrameShape(QFrame::NoFrame);
+  m_serverScroll->setWidgetResizable(true);
+  m_serverScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  m_serverScroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  m_serverScroll->viewport()->setAutoFillBackground(false);
+
+  m_serverListContainer = new QWidget(m_serverScroll);
+  m_serverListContainer->setObjectName("server-list-container");
+  m_serverListLayout = new QVBoxLayout(m_serverListContainer);
+  m_serverListLayout->setContentsMargins(0, 0, 0, 0);
+  m_serverListLayout->setSpacing(kServerRowSpacing);
+  m_serverScroll->setWidget(m_serverListContainer);
+
+  layout->addWidget(m_serverScroll);
+  layout->addSpacing(kServerRowSpacing);
+
+  // 「添加新服务器」固定在滚动区之外，服务器再多也始终可见。
+  m_addServerBtn = new QPushButton(tr("Add New Server"), this);
+  m_addServerBtn->setObjectName("add-server-btn");
+  m_addServerBtn->setCursor(Qt::PointingHandCursor);
+  m_addServerBtn->setFixedHeight(kAddServerRowHeight);
+  connect(m_addServerBtn, &QPushButton::clicked, this, &LoginView::showAddPage);
+  layout->addWidget(m_addServerBtn);
+
+  layout->addStretch();
 }
 
 void LoginView::setupAddPage() {
     m_addPage = new QWidget(this);
     m_addPage->setObjectName("login-add-page");
     m_addPage->setAttribute(Qt::WA_StyledBackground, true);
-    auto *layout = new QVBoxLayout(m_addPage);
+    // 列表页现在是 600 宽（见 setupUi），表单页跟着变宽会把输入框拉得很长。
+    // 这里外层只负责居中，表单本身维持原来的宽度。
+    auto *pageLayout = new QHBoxLayout(m_addPage);
+    pageLayout->setContentsMargins(0, 0, 0, 0);
+    auto *formContainer = new QWidget(m_addPage);
+    formContainer->setObjectName("login-add-form");
+    formContainer->setFixedWidth(kAddFormWidth);
+    auto *layout = new QVBoxLayout(formContainer);
     layout->setSpacing(8);
     layout->setContentsMargins(8, 8, 8, 8);
+    pageLayout->addStretch();
+    pageLayout->addWidget(formContainer);
+    pageLayout->addStretch();
 
   auto *titleLabel = new QLabel(tr("Connect to Server"), this);
   titleLabel->setObjectName("login-title");
@@ -661,244 +689,199 @@ void LoginView::setupAddPage() {
 }
 
 void LoginView::refreshServerList() {
-  int lastSelectedIndex = m_wheelView->currentIndex();
-  m_wheelView->clear();
+  rebuildServerRows();
 
-  QList<ServerProfile> servers = m_core->serverManager()->servers();
-  if (servers.isEmpty()) {
+  if (m_core->serverManager()->servers().isEmpty()) {
+    // 全新安装 / 删光服务器：直接进表单页，少点一次。
     showAddPage();
     return;
   }
 
-  
-  
-  
-  
-  auto createAddCardNode = [this]() {
-    auto *addCard = new QWidget(this);
-    addCard->setObjectName("server-card");
-    addCard->setAttribute(Qt::WA_StyledBackground, true);
-    addCard->setCursor(Qt::PointingHandCursor);
-
-    auto *addCardLayout = new QHBoxLayout(addCard);
-    addCardLayout->setContentsMargins(15, 8, 15, 8);
-
-    auto *addIconLabel = new QLabel(this);
-    addIconLabel->setFixedSize(40, 40);
-    addIconLabel->setScaledContents(true);
-    addIconLabel->setAlignment(Qt::AlignCenter);
-
-    
-    addIconLabel->setPixmap(QPixmap(getThemeSvgPath("add.svg")));
-
-    auto *addInfoLayout = new QVBoxLayout();
-    addInfoLayout->setSpacing(2);
-
-    
-    auto *addNameLabel = new QLabel(tr("Add New Server"), this);
-    addNameLabel->setObjectName("server-name-label");
-    QFont nFont = addNameLabel->font();
-    nFont.setPixelSize(15);
-    nFont.setBold(true);
-    addNameLabel->setFont(nFont);
-
-    
-    auto *addDescLabel = new QLabel(tr("Connect to another server"), this);
-    addDescLabel->setObjectName("server-url-label");
-    QFont uFont = addDescLabel->font();
-    uFont.setPixelSize(12);
-    addDescLabel->setFont(uFont);
-
-    addInfoLayout->addWidget(addNameLabel);
-    addInfoLayout->addWidget(addDescLabel);
-
-    auto *dummyActionContainer = new QWidget(this);
-    dummyActionContainer->hide();
-
-    addCardLayout->addWidget(addIconLabel);
-    addCardLayout->addSpacing(12);
-    addCardLayout->addLayout(addInfoLayout);
-    addCardLayout->addStretch();
-    addCardLayout->addWidget(dummyActionContainer);
-
-    int addCardIndex = m_wheelView->count();
-
-    auto onAddClick = [this, addCardIndex]() {
-      int N = m_wheelView->count();
-      int currentIndex = m_wheelView->currentIndex();
-      int diff = qAbs(currentIndex - addCardIndex);
-      int distance = qMin(diff, N - diff);
-
-      
-      if (m_wheelView->currentIndex() != addCardIndex) {
-        m_wheelView->setCurrentIndex(addCardIndex, true);
-      }
-
-      
-      
-      if (distance <= 1) {
-        showAddPage();
-      }
-    };
-    addCard->installEventFilter(
-        new CardEventFilter(dummyActionContainer, onAddClick, addCard));
-
-    m_wheelView->addCard(addCard);
-  };
-
-  
-  
-  
-  
-  
-  int baseCount = 1 + servers.size();
-  int repeatCount = 1;
-  while (baseCount * repeatCount < 5) {
-    repeatCount++;
-  }
-
-  
-  for (int r = 0; r < repeatCount; ++r) {
-
-    createAddCardNode(); 
-
-    for (const auto &server : servers) {
-      auto *card = new QWidget(this);
-      card->setObjectName("server-card");
-      card->setAttribute(Qt::WA_StyledBackground, true);
-      card->setCursor(Qt::PointingHandCursor);
-
-      auto *cardLayout = new QHBoxLayout(card);
-      cardLayout->setContentsMargins(15, 8, 15, 8);
-
-      auto *iconLabel = new QLabel(this);
-      iconLabel->setFixedSize(40, 40);
-      iconLabel->setScaledContents(true);
-      iconLabel->setAlignment(Qt::AlignCenter);
-
-      if (server.type == ServerProfile::Jellyfin) {
-        iconLabel->setPixmap(QPixmap(":/svg/jellyfin.svg"));
-      } else {
-        if (!server.iconBase64.isEmpty()) {
-          QPixmap pix;
-          pix.loadFromData(QByteArray::fromBase64(server.iconBase64.toUtf8()));
-          iconLabel->setPixmap(pix);
-        } else {
-          iconLabel->setPixmap(QPixmap(":/svg/emby.svg"));
-        }
-      }
-
-      auto *infoLayout = new QVBoxLayout();
-      infoLayout->setSpacing(2);
-
-      
-      auto *nameLabel = new QLabel(server.name, this);
-      nameLabel->setObjectName("server-name-label");
-      QFont nFont = nameLabel->font();
-      nFont.setPixelSize(15);
-      nFont.setBold(true);
-      nameLabel->setFont(nFont);
-
-      
-      auto *urlLabel = new QLabel(server.url, this);
-      urlLabel->setObjectName("server-url-label");
-      QFont uFont = urlLabel->font();
-      uFont.setPixelSize(12);
-      urlLabel->setFont(uFont);
-
-      infoLayout->addWidget(nameLabel);
-      infoLayout->addWidget(urlLabel);
-
-      auto *actionContainer = new QWidget(this);
-      auto *actionLayout = new QHBoxLayout(actionContainer);
-      actionLayout->setContentsMargins(0, 0, 0, 0);
-      actionLayout->setSpacing(8);
-
-      auto *editBtn = new QPushButton(this);
-      editBtn->setObjectName("action-edit-btn");
-      editBtn->setToolTip(tr("Edit"));
-      editBtn->setCursor(Qt::PointingHandCursor);
-      connect(editBtn, &QPushButton::clicked, this,
-              [this, id = server.id]() { onEditServerClicked(id); });
-
-      auto *delBtn = new QPushButton(this);
-      delBtn->setObjectName("action-del-btn");
-      delBtn->setToolTip(tr("Delete"));
-      delBtn->setCursor(Qt::PointingHandCursor);
-      connect(delBtn, &QPushButton::clicked, this,
-              [this, id = server.id]() { onRemoveServerClicked(id); });
-
-      actionLayout->addWidget(editBtn);
-      actionLayout->addWidget(delBtn);
-      actionContainer->hide();
-
-      cardLayout->addWidget(iconLabel);
-      cardLayout->addSpacing(12);
-      cardLayout->addLayout(infoLayout);
-      cardLayout->addStretch();
-      cardLayout->addWidget(actionContainer);
-
-      int cardIndex = m_wheelView->count();
-
-      auto onClick = [this, id = server.id, cardIndex]() {
-        int N = m_wheelView->count();
-        int currentIndex = m_wheelView->currentIndex();
-        int diff = qAbs(currentIndex - cardIndex);
-        int distance = qMin(diff, N - diff);
-
-        
-        if (m_wheelView->currentIndex() != cardIndex) {
-          m_wheelView->setCurrentIndex(cardIndex, true);
-        }
-
-        
-        if (distance <= 1) {
-          onServerCardClicked(id);
-        }
-      };
-      card->installEventFilter(
-          new CardEventFilter(actionContainer, onClick, card));
-
-      m_wheelView->addCard(card);
-    }
-  }
-
-  int totalCount = m_wheelView->count();
-  int targetIndex = 1;
-
-  
-  
-  
-  if (lastSelectedIndex > 0 && lastSelectedIndex < totalCount) {
-    targetIndex = lastSelectedIndex;
-  } else {
-    QString lastServerId =
-        ConfigStore::instance()->get<QString>(ConfigKeys::LastSelectedServerId);
-    if (!lastServerId.isEmpty()) {
-      for (int i = 0; i < servers.size(); ++i) {
-        if (servers[i].id == lastServerId) {
-          targetIndex = i + 1; 
-          break;
-        }
-      }
-    }
-  }
-
-  targetIndex = qBound(0, targetIndex, totalCount - 1);
-  m_wheelView->setCurrentIndex(targetIndex, false);
-
-  
-  m_wheelView->setTransitionMode(true);
-  
-  
-  QTimer::singleShot(450, m_wheelView, [this]() {
-    if (m_wheelView)
-      m_wheelView->setTransitionMode(
-          false); 
-  });
-
   m_editingServerId.clear();
   m_pageSwitcher->setCurrentWidget(m_listPage);
+}
+
+void LoginView::rebuildServerRows() {
+  if (!m_serverListLayout) {
+    return;
+  }
+
+  //
+  // 先清空旧行。用 hide() + deleteLater() 而不是直接 delete：
+  // 本函数会在 QMenu 的嵌套事件循环里被调用（菜单项触发的重排），
+  // 立即析构会让菜单所属的事件目标悬空。
+  QLayoutItem *item = nullptr;
+  while ((item = m_serverListLayout->takeAt(0)) != nullptr) {
+    if (QWidget *w = item->widget()) {
+      w->hide();
+      w->deleteLater();
+    }
+    delete item;
+  }
+
+  const QList<ServerProfile> servers = m_core->serverManager()->servers();
+  for (const auto &server : servers) {
+    m_serverListLayout->addWidget(createServerRow(server));
+  }
+  m_serverListLayout->addStretch();
+
+  //
+  // 高度按行数收缩：不超过 kMaxVisibleServerRows 行时不滚动；超过则封顶，
+  // 多出来的行交给 QScrollArea（第 6 行只露一半，提示还能往下滚）。
+  const int shown =
+      qBound(0, static_cast<int>(servers.size()), kMaxVisibleServerRows);
+  if (shown == 0) {
+    m_serverScroll->hide();
+  } else {
+    m_serverScroll->setFixedHeight(shown * kServerRowHeight +
+                                   (shown - 1) * kServerRowSpacing);
+    m_serverScroll->show();
+  }
+
+  //
+  // 沿用旧行为：把上次使用的服务器滚进可见区域，免得服务器一多就找不到。
+  const QString lastId =
+      ConfigStore::instance()->get<QString>(ConfigKeys::LastSelectedServerId);
+  if (!lastId.isEmpty()) {
+    for (int i = 0; i < servers.size() && i < m_serverListLayout->count(); ++i) {
+      if (servers[i].id != lastId) {
+        continue;
+      }
+      QLayoutItem *rowItem = m_serverListLayout->itemAt(i);
+      if (rowItem && rowItem->widget()) {
+        m_serverScroll->ensureWidgetVisible(rowItem->widget(), 0,
+                                            kServerRowHeight);
+      }
+      break;
+    }
+  }
+}
+
+QWidget *LoginView::createServerRow(const ServerProfile &server) {
+  auto *row = new QWidget(m_serverListContainer);
+  row->setObjectName("server-card");
+  row->setAttribute(Qt::WA_StyledBackground, true);
+  row->setFixedHeight(kServerRowHeight);
+  row->setCursor(Qt::PointingHandCursor);
+
+  auto *rowLayout = new QHBoxLayout(row);
+  rowLayout->setContentsMargins(16, 0, 12, 0);
+  rowLayout->setSpacing(0);
+
+  auto *iconLabel = new QLabel(row);
+  iconLabel->setFixedSize(46, 46);
+  iconLabel->setScaledContents(true);
+  iconLabel->setAlignment(Qt::AlignCenter);
+  if (server.type == ServerProfile::Jellyfin) {
+    iconLabel->setPixmap(QPixmap(":/svg/jellyfin.svg"));
+  } else if (!server.iconBase64.isEmpty()) {
+    QPixmap pix;
+    pix.loadFromData(QByteArray::fromBase64(server.iconBase64.toUtf8()));
+    iconLabel->setPixmap(pix);
+  } else {
+    iconLabel->setPixmap(QPixmap(":/svg/emby.svg"));
+  }
+  rowLayout->addWidget(iconLabel);
+  rowLayout->addSpacing(16);
+
+  auto *infoLayout = new QVBoxLayout();
+  infoLayout->setSpacing(2);
+
+  auto *nameLabel = new QLabel(server.name, row);
+  nameLabel->setObjectName("server-name-label");
+  QFont nameFont = nameLabel->font();
+  nameFont.setPixelSize(15);
+  nameFont.setBold(true);
+  nameLabel->setFont(nameFont);
+  // 忽略水平 sizeHint：长服务器名 / URL 不会把列表撑出横向滚动条，
+  // 行宽完全由容器决定，超出部分裁切。
+  nameLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+
+  auto *urlLabel = new QLabel(server.url, row);
+  urlLabel->setObjectName("server-url-label");
+  QFont urlFont = urlLabel->font();
+  urlFont.setPixelSize(12);
+  urlLabel->setFont(urlFont);
+  urlLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+
+  infoLayout->addWidget(nameLabel);
+  infoLayout->addWidget(urlLabel);
+  rowLayout->addLayout(infoLayout);
+  rowLayout->addStretch();
+
+  // 行尾「⋮」：编辑 / 排序 / 删除都收进菜单，行本身只负责登录。
+  auto *menuBtn = new QPushButton(row);
+  menuBtn->setObjectName("server-menu-btn");
+  menuBtn->setIcon(QIcon(getThemeSvgPath("more-line.svg")));
+  menuBtn->setIconSize(QSize(16, 16));
+  menuBtn->setFixedSize(28, 28);
+  menuBtn->setCursor(Qt::PointingHandCursor);
+  menuBtn->setToolTip(tr("More"));
+  connect(menuBtn, &QPushButton::clicked, this,
+          [this, id = server.id, menuBtn]() { showServerMenu(id, menuBtn); });
+  rowLayout->addWidget(menuBtn);
+
+  row->installEventFilter(new RowClickFilter(
+      [this, id = server.id]() { onServerCardClicked(id); }, row));
+
+  return row;
+}
+
+void LoginView::showServerMenu(const QString &serverId, QWidget *anchor) {
+  const QList<ServerProfile> servers = m_core->serverManager()->servers();
+  int index = -1;
+  for (int i = 0; i < servers.size(); ++i) {
+    if (servers[i].id == serverId) {
+      index = i;
+      break;
+    }
+  }
+  if (index < 0 || !anchor) {
+    return;
+  }
+  const int lastIndex = static_cast<int>(servers.size()) - 1;
+
+  QMenu menu(this);
+
+  QAction *editAction = menu.addAction(tr("Edit"));
+  connect(editAction, &QAction::triggered, this,
+          [this, serverId]() { onEditServerClicked(serverId); });
+
+  menu.addSeparator();
+
+  // 两端的排序项置灰，省掉"点了没反应"。
+  QAction *upAction = menu.addAction(tr("Move Up"));
+  upAction->setEnabled(index > 0);
+  connect(upAction, &QAction::triggered, this,
+          [this, serverId, index]() { moveServerTo(serverId, index - 1); });
+
+  QAction *downAction = menu.addAction(tr("Move Down"));
+  downAction->setEnabled(index < lastIndex);
+  connect(downAction, &QAction::triggered, this,
+          [this, serverId, index]() { moveServerTo(serverId, index + 1); });
+
+  QAction *topAction = menu.addAction(tr("Move to Top"));
+  topAction->setEnabled(index > 0);
+  connect(topAction, &QAction::triggered, this,
+          [this, serverId]() { moveServerTo(serverId, 0); });
+
+  QAction *bottomAction = menu.addAction(tr("Move to Bottom"));
+  bottomAction->setEnabled(index < lastIndex);
+  connect(bottomAction, &QAction::triggered, this,
+          [this, serverId, lastIndex]() { moveServerTo(serverId, lastIndex); });
+
+  menu.addSeparator();
+
+  QAction *delAction = menu.addAction(tr("Delete"));
+  connect(delAction, &QAction::triggered, this,
+          [this, serverId]() { onRemoveServerClicked(serverId); });
+
+  menu.exec(anchor->mapToGlobal(QPoint(0, anchor->height())));
+}
+
+void LoginView::moveServerTo(const QString &serverId, int newIndex) {
+  m_core->serverManager()->moveServer(serverId, newIndex);
+  rebuildServerRows();
 }
 
 void LoginView::showAddPage() {
@@ -943,9 +926,10 @@ void LoginView::showAddPage() {
 }
 
 void LoginView::showListPage() {
-  if (m_core->serverManager()->servers().isEmpty())
-    return;
-  refreshServerList();
+  // 列表为空时也允许停在列表页（页面里就有「添加新服务器」按钮）；
+  // 早退会让新装 / 删光服务器后的「取消」变成一个点不动的死按钮。
+  rebuildServerRows();
+  m_pageSwitcher->setCurrentWidget(m_listPage);
 }
 
 void LoginView::onEditServerClicked(const QString &serverId) {
@@ -1039,10 +1023,6 @@ QCoro::Task<void> LoginView::onServerCardClicked(const QString &serverId) {
     m_loadingOverlay->hide();
 
     ConfigStore::instance()->set(ConfigKeys::LastSelectedServerId, safeServerId);
-
-    
-    
-    m_wheelView->setTransitionMode(true);
     Q_EMIT loginCompleted();
   } catch (const std::exception &e) {
     if (!guard)
@@ -1128,9 +1108,6 @@ QCoro::Task<void> LoginView::onLoginClicked() {
 
     m_loginButton->setEnabled(true);
     m_loginButton->setText(tr("Login"));
-
-    
-    m_wheelView->setTransitionMode(true);
     Q_EMIT loginCompleted();
 
   } catch (const std::exception &e) {

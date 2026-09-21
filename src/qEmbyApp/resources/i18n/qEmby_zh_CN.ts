@@ -284,6 +284,26 @@ Error: </source>
         <source>✗ %1</source>
         <translation>✗ %1</translation>
     </message>
+    <message>
+        <source>More</source>
+        <translation>更多</translation>
+    </message>
+    <message>
+        <source>Move Up</source>
+        <translation>上移</translation>
+    </message>
+    <message>
+        <source>Move Down</source>
+        <translation>下移</translation>
+    </message>
+    <message>
+        <source>Move to Top</source>
+        <translation>置顶</translation>
+    </message>
+    <message>
+        <source>Move to Bottom</source>
+        <translation>置底</translation>
+    </message>
 </context>
 
 <context>

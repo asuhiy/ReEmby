@@ -11,17 +11,19 @@ class QLineEdit;
 class QPushButton;
 class QLabel;
 class QStackedWidget;
+class QScrollArea;
 class QVBoxLayout;
 class QEmbyCore;
 class QResizeEvent;
 class QAction; 
 class QUrl;
 
+struct ServerProfile;
+
 
 class LoadingOverlay;
 class ModernComboBox;
 class ModernSwitch;
-class ServerWheelView;
 class WebdavProfileStore;
 
 class LoginView : public QWidget
@@ -72,8 +74,12 @@ private:
     QWidget* m_listPage;
     QWidget* m_addPage;
 
-    
-    ServerWheelView* m_wheelView;
+    // 服务器列表页：QScrollArea 承载逐行服务器 + 底部固定的「添加新服务器」行。
+    // 显示不超过 kMaxVisibleServerRows 行，超出则滚动（见 rebuildServerRows）。
+    QScrollArea* m_serverScroll = nullptr;
+    QWidget* m_serverListContainer = nullptr;
+    QVBoxLayout* m_serverListLayout = nullptr;
+    QPushButton* m_addServerBtn = nullptr;
 
     ModernComboBox* m_protocolInput;
     QLineEdit* m_serverAddressInput;
@@ -118,6 +124,14 @@ private:
     void setupListPage();
     void setupAddPage();
     void refreshServerList();
+    // 清空并重建列表页里的服务器行（不含底部「添加新服务器」行），
+    // 同时按行数调整滚动区高度：<= 5 行不滚动，> 5 行封顶并出现滚动条。
+    void rebuildServerRows();
+    QWidget* createServerRow(const ServerProfile& server);
+    // 弹出行尾「⋮」菜单（编辑 / 上移 / 下移 / 置顶 / 置底 / 删除）。
+    void showServerMenu(const QString& serverId, QWidget* anchor);
+    // 把服务器移动到指定下标（越界由 ServerManager 夹取）。
+    void moveServerTo(const QString& serverId, int newIndex);
     void refreshServerProxyTooltip();
     void openProxyDialogForCurrentEntry();
     

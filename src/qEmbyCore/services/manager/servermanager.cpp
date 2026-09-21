@@ -172,6 +172,30 @@ void ServerManager::updateServerProfile(
     }
 }
 
+void ServerManager::moveServer(const QString& id, int newIndex) {
+    int from = -1;
+    for (int i = 0; i < m_servers.size(); ++i) {
+        if (m_servers[i].id == id) {
+            from = i;
+            break;
+        }
+    }
+    if (from < 0) {
+        qWarning() << "[ServerManager] moveServer: server not found"
+                   << "| id:" << id;
+        return;
+    }
+
+    newIndex = qBound(0, newIndex, m_servers.size() - 1);
+    if (newIndex == from) {
+        return;
+    }
+
+    m_servers.move(from, newIndex);
+    saveSettings();
+    Q_EMIT serversChanged();
+}
+
 
 
 

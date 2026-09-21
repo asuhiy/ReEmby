@@ -38,6 +38,14 @@ public:
     void updateServerProfile(const QString& id,
                              const std::function<void(ServerProfile&)>& mutator);
 
+    // Moves the server matched by id so that it ends up at newIndex.
+    // newIndex is clamped to [0, count - 1], so callers can pass a large
+    // positive value to mean "move to the end". The list order is what the
+    // server picker renders and saveSettings() writes it to disk as-is, so
+    // this persists the new order. No-op when the id is unknown or the
+    // server already sits at newIndex.
+    void moveServer(const QString& id, int newIndex);
+
     
     QList<ServerProfile> servers() const { return m_servers; }
     ServerProfile activeProfile() const { return m_activeProfile; }

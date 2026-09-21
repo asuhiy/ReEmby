@@ -597,6 +597,36 @@ QWidget#server-card:hover {
     border: 1px solid #475569;
 }
 
+/* 列表页容器：滚动区与内容都透明，让背景透出来 */
+QScrollArea#server-list-scroll {
+    background: transparent;
+    border: none;
+}
+
+QScrollArea#server-list-scroll > QWidget > QWidget {
+    background: transparent;
+}
+
+QWidget#server-list-container {
+    background: transparent;
+}
+
+/* 行尾「⋮」：默认透明，悬停才浮出底色（图标由 C++ 按主题设置） */
+QPushButton#server-menu-btn {
+    background-color: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 0px;
+}
+
+QPushButton#server-menu-btn:hover {
+    background-color: #334155;
+}
+
+QPushButton#server-menu-btn:pressed {
+    background-color: #475569;
+}
+
 QLabel#server-name-label {
     font-weight: 700;
     color: #F8FAFC;
