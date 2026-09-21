@@ -125,14 +125,29 @@ private:
     void setupListPage();
     void setupAddPage();
     void refreshServerList();
+
+    // 列表重排后滚动条该停在哪。
+    // 重建行会把内容清空、滚动位置被夹回顶部，所以重排后必须显式定位，
+    // 否则用户上/下移一台服务器后视角会跳回列表开头。
+    enum class RowScrollIntent {
+        KeepSelected,  // 把上次使用的服务器滚进可见区（默认）
+        Top,           // 置顶 -> 滚到顶部
+        Bottom,        // 置底 -> 拉到最底部
+        StepUp,        // 上移一格 -> 滚动条跟一行，被移动项在视口里的位置不变
+        StepDown,      // 下移一格 -> 同上
+    };
+
     // 清空并重建列表页里的服务器行（不含底部「添加新服务器」行），
     // 同时按行数调整滚动区高度：<= 5 行不滚动，> 5 行封顶并出现滚动条。
-    void rebuildServerRows();
+    void rebuildServerRows(
+        RowScrollIntent intent = RowScrollIntent::KeepSelected);
     QWidget* createServerRow(const ServerProfile& server);
     // 弹出行尾「⋮」菜单（编辑 / 上移 / 下移 / 置顶 / 置底 / 删除）。
     void showServerMenu(const QString& serverId, QWidget* anchor);
-    // 把服务器移动到指定下标（越界由 ServerManager 夹取）。
-    void moveServerTo(const QString& serverId, int newIndex);
+    // 把服务器移动到指定下标（越界由 ServerManager 夹取），
+    // 并按 intent 决定重排后滚动条的落点。
+    void moveServerTo(const QString& serverId, int newIndex,
+                      RowScrollIntent intent = RowScrollIntent::KeepSelected);
     void refreshServerProxyTooltip();
     void openProxyDialogForCurrentEntry();
     

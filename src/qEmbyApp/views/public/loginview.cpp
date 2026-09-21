@@ -729,10 +729,15 @@ void LoginView::refreshServerList() {
   m_pageSwitcher->setCurrentWidget(m_listPage);
 }
 
-void LoginView::rebuildServerRows() {
+void LoginView::rebuildServerRows(RowScrollIntent intent) {
   if (!m_serverListLayout) {
     return;
   }
+
+  // 重建会把内容清空，QScrollArea 的 maximum 随之变 0、滚动值被夹回顶部，
+  // 所以必须在清空之前把当前位置记下来（上/下移要靠它算目标位置）。
+  const int previousScroll =
+      m_serverScroll ? m_serverScroll->verticalScrollBar()->value() : 0;
 
   //
   // 先清空旧行。用 hide() + deleteLater() 而不是直接 delete：
@@ -774,28 +779,70 @@ void LoginView::rebuildServerRows() {
     m_serverPanel->show();
   }
 
+  // 强制先跑完一轮布局，让滚动区的内容高度 / range 尽快刷新到新值；
+  // 下面延迟定位读到的 maximum 才是可信的。
+  m_serverListLayout->activate();
+
   //
-  // 沿用旧行为：把上次使用的服务器滚进可见区域，免得服务器一多就找不到。
+  // 滚动定位：必须等布局生效之后再设。此刻 scrollbar 的 range 还是清空阶段
+  // 被夹成的旧值（maximum 可能仍是 0），立刻定位会失效 —— 这正是"上/下移
+  // 一台服务器后视角跳回列表顶部"的原因。
+  //
+  // 行 widget 上都挂了 serverId 属性，所以这里不必再捕获整个 servers 列表。
   const QString lastId =
       ConfigStore::instance()->get<QString>(ConfigKeys::LastSelectedServerId);
-  if (!lastId.isEmpty()) {
-    for (int i = 0; i < servers.size() && i < m_serverListLayout->count(); ++i) {
-      if (servers[i].id != lastId) {
-        continue;
-      }
-      QLayoutItem *rowItem = m_serverListLayout->itemAt(i);
-      if (rowItem && rowItem->widget()) {
-        m_serverScroll->ensureWidgetVisible(rowItem->widget(), 0,
-                                            kServerRowHeight);
-      }
+  QPointer<LoginView> guard(this);
+  QTimer::singleShot(0, this, [guard, intent, previousScroll, lastId]() {
+    if (!guard || !guard->m_serverScroll) {
+      return;
+    }
+    QScrollBar *bar = guard->m_serverScroll->verticalScrollBar();
+    if (!bar) {
+      return;
+    }
+
+    // 一行占用的总高度（行本体 + 它下面的 1px 分隔线）。
+    constexpr int kRowStep = kServerRowHeight + kServerRowSepHeight;
+
+    switch (intent) {
+    case RowScrollIntent::Top:
+      bar->setValue(0);
+      return;
+    case RowScrollIntent::Bottom:
+      bar->setValue(bar->maximum());
+      return;
+    case RowScrollIntent::StepUp:
+      bar->setValue(qBound(0, previousScroll - kRowStep, bar->maximum()));
+      return;
+    case RowScrollIntent::StepDown:
+      bar->setValue(qBound(0, previousScroll + kRowStep, bar->maximum()));
+      return;
+    case RowScrollIntent::KeepSelected:
       break;
     }
-  }
+
+    // 沿用旧行为：把上次使用的服务器滚进可见区域，免得服务器一多就找不到。
+    QVBoxLayout *layout = guard->m_serverListLayout;
+    if (lastId.isEmpty() || !layout) {
+      return;
+    }
+    for (int i = 0; i < layout->count(); ++i) {
+      QLayoutItem *rowItem = layout->itemAt(i);
+      QWidget *row = rowItem ? rowItem->widget() : nullptr;
+      if (row && row->property("serverId").toString() == lastId) {
+        guard->m_serverScroll->ensureWidgetVisible(row, 0, kServerRowHeight);
+        break;
+      }
+    }
+  });
 }
 
 QWidget *LoginView::createServerRow(const ServerProfile &server) {
   auto *row = new QWidget(m_serverListContainer);
   row->setObjectName("server-list-row");
+  // 挂上 id：重排后要按 id 找行做滚动定位（比按下标猜更可靠 ——
+  // 重排当下 servers 的顺序已经变了，而重建是延迟布局的）。
+  row->setProperty("serverId", server.id);
   row->setAttribute(Qt::WA_StyledBackground, true);
   // 普通 QWidget 默认收不到 hover 事件，QSS 的 :hover 就不会生效
   //（项目里 server-switcher-row 为此改用动态属性，这里直接开 WA_Hover 更省事）。
@@ -895,25 +942,31 @@ void LoginView::showServerMenu(const QString &serverId, QWidget *anchor) {
   menu.addSeparator();
 
   // 两端的排序项置灰，省掉"点了没反应"。
+  // 重排后滚动条的落点跟动作对应：上/下移挪一行（被移动的服务器在视口里
+  // 的位置保持不变），置顶滚到顶、置底拉到底，这样一眼能看到它去了哪。
   QAction *upAction = menu.addAction(tr("Move Up"));
   upAction->setEnabled(index > 0);
-  connect(upAction, &QAction::triggered, this,
-          [this, serverId, index]() { moveServerTo(serverId, index - 1); });
+  connect(upAction, &QAction::triggered, this, [this, serverId, index]() {
+    moveServerTo(serverId, index - 1, RowScrollIntent::StepUp);
+  });
 
   QAction *downAction = menu.addAction(tr("Move Down"));
   downAction->setEnabled(index < lastIndex);
-  connect(downAction, &QAction::triggered, this,
-          [this, serverId, index]() { moveServerTo(serverId, index + 1); });
+  connect(downAction, &QAction::triggered, this, [this, serverId, index]() {
+    moveServerTo(serverId, index + 1, RowScrollIntent::StepDown);
+  });
 
   QAction *topAction = menu.addAction(tr("Move to Top"));
   topAction->setEnabled(index > 0);
-  connect(topAction, &QAction::triggered, this,
-          [this, serverId]() { moveServerTo(serverId, 0); });
+  connect(topAction, &QAction::triggered, this, [this, serverId]() {
+    moveServerTo(serverId, 0, RowScrollIntent::Top);
+  });
 
   QAction *bottomAction = menu.addAction(tr("Move to Bottom"));
   bottomAction->setEnabled(index < lastIndex);
-  connect(bottomAction, &QAction::triggered, this,
-          [this, serverId, lastIndex]() { moveServerTo(serverId, lastIndex); });
+  connect(bottomAction, &QAction::triggered, this, [this, serverId, lastIndex]() {
+    moveServerTo(serverId, lastIndex, RowScrollIntent::Bottom);
+  });
 
   menu.addSeparator();
 
@@ -924,9 +977,10 @@ void LoginView::showServerMenu(const QString &serverId, QWidget *anchor) {
   menu.exec(anchor->mapToGlobal(QPoint(0, anchor->height())));
 }
 
-void LoginView::moveServerTo(const QString &serverId, int newIndex) {
+void LoginView::moveServerTo(const QString &serverId, int newIndex,
+                             RowScrollIntent intent) {
   m_core->serverManager()->moveServer(serverId, newIndex);
-  rebuildServerRows();
+  rebuildServerRows(intent);
 }
 
 void LoginView::showAddPage() {
