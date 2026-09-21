@@ -585,13 +585,15 @@ QCoro::Task<LibraryStats> MediaService::getLibraryStats(QString serverId)
         co_return stats;
     }
 
-    // 指定了 serverId 就不能借用 activeClient()（那可能是另一台的连接），
-    // 现建一个 —— 与 getSeasons / getResumeItems 等跨服调用同一套做法。
-    // 构造函数只存 profile + network 两个成员，开销可忽略。
+    // 一律按解析出来的 profile 现建 client，**绝不借用 activeClient()**：
+    // ① 退出登录会走 ServerManager::retireActiveClient()，那里把 m_activeClient
+    //    置空 ⇒ activeClient() 返回 nullptr，借用它就是空指针解引用；
+    // ② 跨服时 profile 来自 serverId 而 activeClient 是另一台 —— 拿 A 的身份
+    //    去请求 B 的连接，本身也是错的。
+    // 构造函数只存 profile + network 两个成员，开销可忽略（对照 getSeasons /
+    // getResumeItems 的跨服做法）。
     ApiClient scopedClient(profile, m_serverManager->network());
-    ApiClient *client = (serverId.isEmpty() && m_serverManager->activeClient())
-                            ? m_serverManager->activeClient()
-                            : &scopedClient;
+    ApiClient *client = &scopedClient;
 
     // 大库的计数也要遍历元数据，给足 20s。
     constexpr int kStatsTimeoutMs = 20000;
@@ -600,7 +602,7 @@ QCoro::Task<LibraryStats> MediaService::getLibraryStats(QString serverId)
     //    显式带 UserId，让它按当前用户的可见范围统计 —— 否则会把用户看不到的
     //    库也算进去。
     try {
-        const QJsonObject response = co_await m_serverManager->activeClient()->get(
+        const QJsonObject response = co_await client->get(
             QStringLiteral("/Items/Counts?UserId=%1").arg(profile.userId),
             kStatsTimeoutMs);
 
@@ -664,11 +666,10 @@ QCoro::Task<int> MediaService::countItemsByType(QString includeItemTypes,
                        "&Limit=1&EnableTotalRecordCount=true")
             .arg(profile.userId, includeItemTypes);
 
-    // 与 getLibraryStats 同样的跨服处理：指定 serverId 时现建 client。
+    // 与 getLibraryStats 同样：一律现建，不借用 activeClient()
+    // （退出登录后它是 nullptr，见 getLibraryStats 里的说明）。
     ApiClient scopedClient(profile, m_serverManager->network());
-    ApiClient *client = (serverId.isEmpty() && m_serverManager->activeClient())
-                            ? m_serverManager->activeClient()
-                            : &scopedClient;
+    ApiClient *client = &scopedClient;
 
     const QJsonObject response = co_await client->get(path, 20000);
     co_return response.value(QStringLiteral("TotalRecordCount")).toInt();
