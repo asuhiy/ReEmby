@@ -1151,10 +1151,12 @@ QCoro::Task<void> PlayerDanmakuController::loadDanmakuTask(quint64 requestId,
             << "| mediaId:" << mediaContext.mediaId
             << "| manualKeyword:" << trimmedKeyword
             << "| error:" << e.what();
-        emit safeThis->toastRequested(
-            isDandanCredentialError(errorMessage)
-                ? errorMessage
-                : tr("Failed to load danmaku"));
+        // 加载失败一律只记日志、不弹 toast：弹幕源（尤其自建的第三方服务）
+        // 偶发 5xx 很常见，每部片子都弹一次太吵，而用户对此无能为力。
+        // 唯一的例外是凭证类错误 —— 那是用户自己能修的，必须告诉他。
+        if (isDandanCredentialError(errorMessage)) {
+            emit safeThis->toastRequested(errorMessage);
+        }
         emit safeThis->stateChanged();
     }
 }
@@ -1268,10 +1270,12 @@ QCoro::Task<void> PlayerDanmakuController::loadDanmakuCandidateTask(
             << "| endpointName:" << candidate.endpointName
             << "| targetId:" << candidate.targetId
             << "| error:" << e.what();
-        emit safeThis->toastRequested(
-            isDandanCredentialError(errorMessage)
-                ? errorMessage
-                : tr("Failed to load danmaku"));
+        // 加载失败一律只记日志、不弹 toast：弹幕源（尤其自建的第三方服务）
+        // 偶发 5xx 很常见，每部片子都弹一次太吵，而用户对此无能为力。
+        // 唯一的例外是凭证类错误 —— 那是用户自己能修的，必须告诉他。
+        if (isDandanCredentialError(errorMessage)) {
+            emit safeThis->toastRequested(errorMessage);
+        }
         emit safeThis->stateChanged();
     }
 }
