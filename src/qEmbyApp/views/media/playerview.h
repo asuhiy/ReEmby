@@ -304,6 +304,12 @@ private:
     int m_statisticsOverlayX = 12;
     int m_statisticsOverlayY = 0;
     LoadingOverlay *m_loadingOverlay; 
+    // 缓冲结束时不立刻隐藏转圈，先等一小会儿（见 updateLoadingState）。
+    // mpv 的 paused-for-cache 在慢链路上会 true/false 反复跳，立刻隐藏会让
+    // 转圈和画面交替出现 —— 看起来就是"一闪一闪"。
+    QTimer *m_loadingHideTimer = nullptr;
+    // 转圈当前是否处于显示状态（避免对已隐藏的 overlay 反复 stop）。
+    bool m_loadingShown = false;
 
     
     QLabel *m_logoLabel;

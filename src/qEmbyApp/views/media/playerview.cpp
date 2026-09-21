@@ -80,6 +80,10 @@
 namespace
 {
 constexpr int kHudAutoHideDelayMs = 1800;
+// 停止缓冲后，转圈再停留多久才淡出。mpv 的 paused-for-cache 在慢链路上会在
+// true/false 之间反复跳（短暂拿到数据就解除、缓冲耗尽又进入），如果每次都
+// 立刻隐藏转圈，画面就会"一闪一闪"。给一点宽限期让抖动被吸收掉。
+constexpr int kLoadingHideDelayMs = 400;
 // 独立播放窗口（standalone）下 HUD 是原生窗口、靠 setVisible 显隐，停留时间
 // 比内嵌略长一点。
 constexpr int kStandaloneHudAutoHideDelayMs = 2000;
@@ -1302,7 +1306,24 @@ void PlayerView::setupUi()
     
     m_loadingOverlay->setAttribute(Qt::WA_TransparentForMouseEvents, true);
 
-    
+    // 缓冲结束时不立刻隐藏转圈，先等 kLoadingHideDelayMs。期间若又回到缓冲
+    // 状态（updateLoadingState 会停掉这个定时器），转圈就一直保持显示。
+    m_loadingHideTimer = new QTimer(this);
+    m_loadingHideTimer->setSingleShot(true);
+    m_loadingHideTimer->setInterval(kLoadingHideDelayMs);
+    connect(m_loadingHideTimer, &QTimer::timeout, this, [this]()
+            {
+                if (m_isBuffering || m_isSeeking)
+                {
+                    return;
+                }
+                if (m_loadingOverlay)
+                {
+                    m_loadingOverlay->stop();
+                }
+                m_loadingShown = false;
+            });
+
     connect(m_mpvWidget->controller(), &MpvController::fileLoaded, this,
             [this]()
             {
@@ -2147,16 +2168,27 @@ void PlayerView::updateLoadingState()
 {
     if (m_isViewTearingDown)
     {
+        if (m_loadingHideTimer)
+        {
+            m_loadingHideTimer->stop();
+        }
         if (m_loadingOverlay)
         {
             m_loadingOverlay->forceStop();
         }
+        m_loadingShown = false;
         return;
     }
 
     if (m_isBuffering || m_isSeeking)
     {
+        // 缓冲 / 跳转中：取消待执行的隐藏，保证转圈一直在。
+        if (m_loadingHideTimer)
+        {
+            m_loadingHideTimer->stop();
+        }
         m_loadingOverlay->start();
+        m_loadingShown = true;
 
         
         
@@ -2171,9 +2203,18 @@ void PlayerView::updateLoadingState()
         if (m_subtitleSubmenu)
             m_subtitleSubmenu->raise();
     }
-    else
+    else if (m_loadingShown)
     {
-        m_loadingOverlay->stop();
+        // 缓冲结束：不立刻隐藏，先等 kLoadingHideDelayMs 让抖动被吸收掉。
+        if (m_loadingHideTimer)
+        {
+            m_loadingHideTimer->start();
+        }
+        else
+        {
+            m_loadingOverlay->stop();
+            m_loadingShown = false;
+        }
     }
 }
 
@@ -3274,6 +3315,11 @@ void PlayerView::stopTransientUiAnimations(bool immediate)
         m_longPressHandler->stopAllAnimations();
     }
 
+    if (m_loadingHideTimer)
+    {
+        m_loadingHideTimer->stop();
+    }
+    m_loadingShown = false;
     if (m_loadingOverlay)
     {
         if (immediate)
