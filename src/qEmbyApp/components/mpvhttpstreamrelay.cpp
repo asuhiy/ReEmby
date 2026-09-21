@@ -40,6 +40,12 @@ constexpr qint64 kDefaultReadaheadBytes = 64 * 1024 * 1024;
 // Memory-only for now; the design in tools/relay-design.md replaces this with
 // a sparse file plus a configurable disk quota.
 constexpr qint64 kCacheMemoryLimitBytes = 256 * 1024 * 1024;
+// How long a cache block keeps its full access heat before that heat starts
+// halving. Only affects eviction priority, never correctness, so the exact
+// value is not critical: 30 s is long enough for the audio track of a
+// non-interleaved file to stay hot across a video seek, and short enough that
+// an early burst of hits cannot pin a block in the cache forever.
+constexpr qint64 kHitHalfLifeNs = 30LL * 1000 * 1000 * 1000;
 // While a client is consuming data, keep the upstream read this far ahead of
 // it instead of having to re-issue a request at every limit boundary.
 constexpr qint64 kFetchLimitLowWaterBytes = 8 * 1024 * 1024;
@@ -716,7 +722,11 @@ void MpvHttpStreamRelay::normalizeCache()
             continue;
         }
         // Overlapping or adjacent: keep what we already have and append only
-        // the bytes we are still missing.
+        // the bytes we are still missing. Heat is carried over as the hotter
+        // of the two -- merging must never lose it, otherwise a block that was
+        // hot before the merge would come out cold and be evicted first.
+        last.hits = qMax(last.hits, block.hits);
+        last.lastHitNs = qMax(last.lastHitNs, block.lastHitNs);
         const qint64 overlap = lastEnd - block.begin;
         if (overlap < static_cast<qint64>(block.data.size()))
         {
@@ -747,7 +757,18 @@ void MpvHttpStreamRelay::appendToCache(const QByteArray &data)
             const qint64 overlap = prevEnd - block.begin;
             if (overlap < static_cast<qint64>(block.data.size()))
             {
-                prev.data.append(block.data.constData() + overlap, block.data.size() - overlap);
+                const qint64 appended = block.data.size() - overlap;
+                prev.data.append(block.data.constData() + overlap, appended);
+                // The bytes just appended have not been read by mpv yet, so the
+                // block keeps its existing heat (>= the fresh block's zero).
+                // This must never reset the counters: the audio region of a
+                // non-interleaved file is exactly the block that keeps growing
+                // through this branch, so resetting would pin it at hits == 0
+                // and make it the prime eviction victim -- i.e. the whole
+                // heat-based fix would silently do nothing.
+                prev.hits = qMax(prev.hits, block.hits);
+                prev.lastHitNs = qMax(prev.lastHitNs, block.lastHitNs);
+                m_cachedBytes += appended;
             }
             mergedIntoPrevious = true;
         }
@@ -755,29 +776,82 @@ void MpvHttpStreamRelay::appendToCache(const QByteArray &data)
     if (!mergedIntoPrevious)
     {
         m_cache.append(block);
+        // A newly appended out-of-order block can overlap existing ones, and
+        // normalizeCache() drops those duplicated bytes while merging, so the
+        // new total is not a plain addition. This path is the rare one -- a
+        // sequential read always merges into the previous block -- so
+        // recomputing here keeps m_cachedBytes exact while removing the O(n)
+        // recount that used to run on every single 1 MiB chunk.
         normalizeCache();
+        recountCachedBytes();
     }
 
     m_fetchPos += data.size();
-    recountCachedBytes();
     evictCacheIfNeeded();
 }
 
 void MpvHttpStreamRelay::evictCacheIfNeeded()
 {
+    // Hot path: as long as the cache is within budget this is a single integer
+    // comparison, which matters because appendToCache() calls it for every
+    // 1 MiB chunk arriving from upstream.
+    if (m_cachedBytes <= kCacheMemoryLimitBytes)
+    {
+        return;
+    }
+
+    // Read the clock once for the whole pass, never once per block.
+    const qint64 nowNs = monotonicNs();
+    // Lazy time decay: a block untouched for a while gives up heat in powers
+    // of two, so an early burst of hits cannot pin it in the cache forever.
+    // Computed on demand rather than by a timer on purpose -- a timer would
+    // have to walk the entire cache periodically, while this is O(1) per block
+    // and only ever runs when something is actually being evicted.
+    const auto effectiveHits = [nowNs](const CacheBlock &block) -> qint64
+    {
+        if (block.hits == 0)
+        {
+            return 0;
+        }
+        const qint64 idleNs = nowNs - block.lastHitNs;
+        if (idleNs <= kHitHalfLifeNs)
+        {
+            return block.hits;
+        }
+        const qint64 shifts = idleNs / kHitHalfLifeNs;
+        if (shifts >= 32) // quint32 >> 32 would be undefined
+        {
+            return 0;
+        }
+        return block.hits >> static_cast<int>(shifts);
+    };
+
     while (m_cachedBytes > kCacheMemoryLimitBytes && m_cache.size() > 1)
     {
         int victim = 0;
-        qint64 worstDistance = -1;
+        qint64 victimHits = 0;
+        qint64 victimLastNs = 0;
+        bool haveVictim = false;
         for (int i = 0; i < m_cache.size(); ++i)
         {
             const CacheBlock &block = m_cache.at(i);
-            const qint64 middle = block.begin + block.data.size() / 2;
-            const qint64 distance = qAbs(middle - m_fetchPos);
-            if (distance > worstDistance)
+            const qint64 hits = effectiveHits(block);
+            // Coldest first; among equally cold blocks, the one idle longest
+            // goes. So bytes that read-ahead pulled in but mpv never consumed
+            // (hits == 0) go first, which is exactly what is worth dropping.
+            // Deliberately NOT by distance from m_fetchPos: that treated the
+            // upstream read cursor as the playback cursor, and for a
+            // non-interleaved file the audio at the end of the file is always
+            // the farthest block, so it was evicted first on every pass no
+            // matter how often mpv asked for it.
+            const bool worse = !haveVictim || hits < victimHits ||
+                               (hits == victimHits && block.lastHitNs < victimLastNs);
+            if (worse)
             {
-                worstDistance = distance;
+                haveVictim = true;
                 victim = i;
+                victimHits = hits;
+                victimLastNs = block.lastHitNs;
             }
         }
         m_cachedBytes -= m_cache.at(victim).data.size();
@@ -923,7 +997,17 @@ void MpvHttpStreamRelay::pumpCacheToSocketImpl(QTcpSocket *socket)
             return;
         }
 
-        const CacheBlock &block = m_cache.at(blockIndex);
+        // Heat is counted HERE -- the one place that actually hands bytes to
+        // mpv. It must NOT go inside cacheBlockContaining(): two of that
+        // function's three call sites only probe ("is anything cached at
+        // needPos?", and they act on the negative answer) and would count a
+        // hit for a request that never got served, inflating the sequential
+        // video region until the heat signal can no longer tell the two hot
+        // spots apart.
+        CacheBlock &block = m_cache[blockIndex];
+        ++block.hits;
+        block.lastHitNs = monotonicNs();
+
         const qint64 offset = it->needPos - block.begin;
         const qint64 wantEnd = (it->reqEnd >= 0) ? qMin(it->reqEnd, m_totalSize - 1) : (m_totalSize - 1);
 

@@ -72,6 +72,16 @@ private:
     struct CacheBlock {
         qint64 begin = 0;
         QByteArray data;
+        // Access heat: how many times mpv actually read bytes out of this
+        // block, and when that last happened. It decides who gets evicted once
+        // the cache is over budget. This replaces the old "farthest from the
+        // upstream read position" rule, which assumed a single, monotonically
+        // forward-moving hot spot -- a wrong assumption for non-interleaved
+        // files, where the audio track sits at the end of the file and is
+        // requested hundreds of times per second while being the "farthest"
+        // block every single time. See tools/relay-eviction-design.md.
+        quint32 hits = 0;
+        qint64 lastHitNs = 0;
     };
 
     struct ConnectionState {
