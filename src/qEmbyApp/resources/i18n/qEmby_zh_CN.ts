@@ -10680,6 +10680,10 @@ This cannot be undone.</source>
         <translation>关闭</translation>
     </message>
     <message>
+        <source>Counts come from the server and may differ slightly by how they are tallied.</source>
+        <translation>数据由服务端返回，统计口径不同可能略有差异。</translation>
+    </message>
+    <message>
         <source>Episodes</source>
         <translation>剧集</translation>
     </message>

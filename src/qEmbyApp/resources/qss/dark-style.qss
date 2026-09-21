@@ -6906,8 +6906,11 @@ QPushButton#dialog-btn-primary:disabled {
 
 /* ────────────────────────── 媒体库信息对话框 ────────────────────────── */
 
+/* 统计卡片：加 1px 边框 —— 纯色块跟对话框背景几乎同色会糊成一片
+   （暗色主题尤其明显），有边框才看得出"这是一张卡" */
 QWidget#library-stat-card {
     background-color: #1E293B;
+    border: 1px solid #334155;
     border-radius: 10px;
 }
 
@@ -6918,7 +6921,7 @@ QLabel#library-stat-title {
 
 QLabel#library-stat-value {
     color: #60A5FA;
-    font-size: 19px;
+    font-size: 20px;
     font-weight: 600;
 }
 
@@ -6932,5 +6935,12 @@ QLabel#library-info-status {
 QLabel#library-info-server {
     color: #94A3B8;
     font-size: 12px;
+    padding-bottom: 2px;
+}
+
+/* 数据口径说明：数字从哪来、为什么可能跟别的客户端对不上 */
+QLabel#library-info-note {
+    color: #94A3B8;
+    font-size: 11px;
     padding-bottom: 2px;
 }

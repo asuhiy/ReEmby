@@ -18,8 +18,12 @@
 
 namespace {
 
-constexpr int kDialogWidth = 470;
-constexpr int kCardHeight = 66;
+// 只有两列数据（分类名 + 数字），窗口不需要那么宽 —— 原来是 470，
+// 分类名和数字一左一右隔着一大片空白，看着很不舒服。
+constexpr int kDialogWidth = 360;
+constexpr int kCardHeight = 54;
+// 卡片内的左右内边距；分类名与数字各占一半宽度（数字在右半区居中）。
+constexpr int kCardPadding = 16;
 
 // 一张统计卡片：左边分类名，右边数字（右对齐）。
 QWidget *createStatCard(const QString &title, QLabel **valueOut,
@@ -31,19 +35,21 @@ QWidget *createStatCard(const QString &title, QLabel **valueOut,
     card->setFixedHeight(kCardHeight);
 
     auto *layout = new QHBoxLayout(card);
-    layout->setContentsMargins(16, 0, 16, 0);
-    layout->setSpacing(12);
+    layout->setContentsMargins(kCardPadding, 0, kCardPadding, 0);
+    layout->setSpacing(0);
 
     auto *titleLabel = new QLabel(title, card);
     titleLabel->setObjectName("library-stat-title");
-    layout->addWidget(titleLabel);
+    titleLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    layout->addWidget(titleLabel, 1);
 
-    layout->addStretch();
-
+    // 数字落在「右半区的中心」（用户选定的方案）：左右各占一半宽度，
+    // 右边这个在自身宽度里居中 —— 比贴右边缘看着平衡，数字长短变化时
+    // 也不会左右晃。
     auto *valueLabel = new QLabel(QStringLiteral("—"), card);
     valueLabel->setObjectName("library-stat-value");
-    valueLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-    layout->addWidget(valueLabel);
+    valueLabel->setAlignment(Qt::AlignCenter);
+    layout->addWidget(valueLabel, 1);
 
     if (valueOut) {
         *valueOut = valueLabel;
@@ -81,11 +87,21 @@ void LibraryInfoDialog::setupUi()
             }
             auto *nameLabel = new QLabel(server.name, this);
             nameLabel->setObjectName("library-info-server");
-            nameLabel->setAlignment(Qt::AlignCenter);
+            nameLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
             root->addWidget(nameLabel);
             break;
         }
     }
+
+    // 数据口径说明：告诉用户数字从哪来、为什么会跟别的客户端对不上，
+    // 免得误以为是 bug。窗口窄，用 word wrap 兜住。
+    auto *noteLabel = new QLabel(
+        tr("Counts come from the server and may differ slightly by how they "
+           "are tallied."),
+        this);
+    noteLabel->setObjectName("library-info-note");
+    noteLabel->setWordWrap(true);
+    root->addWidget(noteLabel);
 
     root->addWidget(createStatCard(tr("Movies"), &m_movieValue, this));
     root->addWidget(createStatCard(tr("TV Shows"), &m_seriesValue, this));
