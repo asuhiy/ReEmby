@@ -663,12 +663,12 @@ QWidget#server-list-row {
 }
 
 QWidget#server-list-row:hover {
-    background-color: #F3F4F6;
+    background-color: #F1F5F9;
 }
 
 /* 行间分隔线：扁平行不再靠空距区分 */
 QFrame#server-list-sep {
-    background-color: #EEF0F3;
+    background-color: #E2E8F0;
     border: none;
 }
 

@@ -597,9 +597,10 @@ QWidget#server-card:hover {
     border: 1px solid #475569;
 }
 
-/* 服务器列表面板：给列表一个可见边界，滚动条才有"归属"感 */
+/* 服务器列表面板：给列表一个可见边界，滚动条才有"归属"感。
+   底色/分隔线/hover 都用蓝调（与页面 #0F172A 同色系）—— 中性灰在这套深色主题上会发脏。 */
 QWidget#server-list-panel {
-    background-color: #1A1D24;
+    background-color: #152238;
     border: 1px solid #334155;
     border-radius: 12px;
 }
@@ -656,12 +657,12 @@ QWidget#server-list-row {
 }
 
 QWidget#server-list-row:hover {
-    background-color: #232730;
+    background-color: #22375A;
 }
 
 /* 行间分隔线：扁平行不再靠空距区分 */
 QFrame#server-list-sep {
-    background-color: #262A33;
+    background-color: #243350;
     border: none;
 }
 
