@@ -82,6 +82,10 @@ private:
     QWidget* m_serverListContainer = nullptr;
     QVBoxLayout* m_serverListLayout = nullptr;
     QPushButton* m_addServerBtn = nullptr;
+    // 底部左侧的「隐藏 / 显示」按钮：切换各行服务器地址是否打码。
+    // 用途是截图分享时不泄露自己的服务器地址。
+    QPushButton* m_toggleUrlBtn = nullptr;
+    bool m_hideServerUrls = false;
 
     ModernComboBox* m_protocolInput;
     QLineEdit* m_serverAddressInput;
@@ -155,6 +159,9 @@ private:
     // 不传就会查错对象（甚至报"未登录"）。
     void onLibraryInfoRequested(const QString& serverId);
     QPointer<QWidget> m_libraryInfoDialog;
+    // 切换「隐藏 / 显示服务器地址」，把每行的 URL 换成圆点占位（或换回来）。
+    // 只改文本、不动滚动位置。
+    void toggleServerUrlVisibility();
     // 当前对话框查的是哪台服务器：换一台要重建，别把上一台的数字给下一个人看。
     QString m_libraryInfoServerId;
     // 把服务器移动到指定下标（越界由 ServerManager 夹取），

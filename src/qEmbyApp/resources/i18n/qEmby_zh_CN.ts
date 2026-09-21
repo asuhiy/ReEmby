@@ -201,6 +201,14 @@ Release notes:
         <translation>添加新服务器</translation>
     </message>
     <message>
+        <source>Hide</source>
+        <translation>隐藏</translation>
+    </message>
+    <message>
+        <source>Show</source>
+        <translation>显示</translation>
+    </message>
+    <message>
         <source>Connect to another server</source>
         <translation>连接到其他服务器</translation>
     </message>

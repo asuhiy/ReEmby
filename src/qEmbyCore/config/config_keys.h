@@ -37,6 +37,9 @@ inline QString forServerMediaSource(const QString& serverId, const QString& medi
 constexpr const char* Language = "general/language";
 constexpr const char* RememberServer = "general/remember_server";
 constexpr const char* LastSelectedServerId = "general/last_selected_server_id";
+// 服务器列表页是否把各行地址打码显示（截图分享时用）。记住用户的选择，
+// 下次启动沿用 —— 默认 false（显示真实地址）。
+constexpr const char* ServerListHideUrls = "general/server_list_hide_urls";
 constexpr const char* CloseToTray = "general/close_to_tray";
 constexpr const char* SingleApplication = "general/single_application";
 constexpr const char* CheckForUpdates = "general/check_for_updates";

@@ -51,6 +51,11 @@ constexpr int kServerListSpacing = 10;
 // 列表面板的内边距：给滚动条和行留一点呼吸空间，别贴着面板边框。
 constexpr int kServerPanelPadding = 6;
 constexpr int kAddServerRowHeight = 52;
+// 底部左侧「隐藏 / 显示」按钮的宽度（与「添加新服务器」虚线框同高并列）。
+constexpr int kToggleUrlBtnWidth = 72;
+// 「隐藏地址」时每行显示的圆点个数。**固定个数**而不是按原串长度：
+// 长度随地址变化会让每行的占位参差不齐，看起来像没对齐。
+constexpr int kMaskedUrlDots = 18;
 // 「连接服务器」表单页的宽度：页面整体是 600 宽，但表单保持原来的窄宽度居中。
 constexpr int kAddFormWidth = 360;
 // 一行里被固定部件占掉的宽度：左边距 12 + 图标 46 + 图标后间距 16 +
@@ -397,6 +402,11 @@ void LoginView::applyServerUrlToForm(const QUrl &url,
 }
 
 void LoginView::setupUi() {
+  // 「隐藏服务器地址」是跨会话记住的偏好：先读上次的选择，后面创建按钮、
+  // 渲染每一行时都按它来（见 ConfigKeys::ServerListHideUrls）。
+  m_hideServerUrls = ConfigStore::instance()->get<bool>(
+      ConfigKeys::ServerListHideUrls, false);
+
   this->setProperty("showGlobalSearch", false);
   this->setProperty("viewTitle", QStringLiteral("ReEmby"));
   this->setProperty("showGlobalBack", false);
@@ -508,13 +518,30 @@ void LoginView::setupListPage() {
   layout->addWidget(m_serverPanel);
   layout->addSpacing(kServerListSpacing);
 
-  // 「添加新服务器」固定在滚动区之外，服务器再多也始终可见。
+  // 底部一排：左边「隐藏 / 显示」按钮（截图分享时把地址打码），右边
+  // 「添加新服务器」。两者同高并列，虚线框相应变窄 —— 它们都在滚动区
+  // 之外，所以服务器再多也始终可见。
+  auto *footerRow = new QHBoxLayout();
+  footerRow->setContentsMargins(0, 0, 0, 0);
+  footerRow->setSpacing(8);
+
+  m_toggleUrlBtn = new QPushButton(
+      m_hideServerUrls ? tr("Show") : tr("Hide"), this);
+  m_toggleUrlBtn->setObjectName("toggle-url-btn");
+  m_toggleUrlBtn->setCursor(Qt::PointingHandCursor);
+  m_toggleUrlBtn->setFixedSize(kToggleUrlBtnWidth, kAddServerRowHeight);
+  connect(m_toggleUrlBtn, &QPushButton::clicked, this,
+          &LoginView::toggleServerUrlVisibility);
+  footerRow->addWidget(m_toggleUrlBtn);
+
   m_addServerBtn = new QPushButton(tr("Add New Server"), this);
   m_addServerBtn->setObjectName("add-server-btn");
   m_addServerBtn->setCursor(Qt::PointingHandCursor);
   m_addServerBtn->setFixedHeight(kAddServerRowHeight);
   connect(m_addServerBtn, &QPushButton::clicked, this, &LoginView::showAddPage);
-  layout->addWidget(m_addServerBtn);
+  footerRow->addWidget(m_addServerBtn, 1);
+
+  layout->addLayout(footerRow);
 
   layout->addStretch();
 }
@@ -905,8 +932,14 @@ QWidget *LoginView::createServerRow(const ServerProfile &server) {
   urlLabel->setFont(urlFont);
   urlLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   // 地址用中间省略：保住 host 和结尾，比只裁尾巴可读。
+  // 「隐藏地址」打开时换成固定个数的圆点占位 —— 用途是截图分享时不泄露
+  // 自己的服务器地址（U+2022 实心圆点，不是星号：星号在字体里偏细偏上，
+  // 打出来发虚）。
+  const QString urlText = m_hideServerUrls
+                              ? QString(kMaskedUrlDots, QChar(0x2022))
+                              : server.url;
   urlLabel->setText(QFontMetrics(urlFont).elidedText(
-      server.url, Qt::ElideMiddle, kServerRowTextWidth));
+      urlText, Qt::ElideMiddle, kServerRowTextWidth));
 
   infoLayout->addWidget(nameLabel);
   infoLayout->addWidget(urlLabel);
@@ -998,6 +1031,20 @@ void LoginView::showServerMenu(const QString &serverId, QWidget *anchor) {
           [this, serverId]() { onRemoveServerClicked(serverId); });
 
   menu.exec(anchor->mapToGlobal(QPoint(0, anchor->height())));
+}
+
+void LoginView::toggleServerUrlVisibility() {
+  m_hideServerUrls = !m_hideServerUrls;
+
+  // 这是跨会话的偏好：记下来，下次启动沿用（用户要求"关掉重开也要记住"）。
+  ConfigStore::instance()->set(ConfigKeys::ServerListHideUrls, m_hideServerUrls);
+
+  if (m_toggleUrlBtn) {
+    m_toggleUrlBtn->setText(m_hideServerUrls ? tr("Show") : tr("Hide"));
+  }
+
+  // 只换各行的地址文本，滚动位置保持不动 —— 否则点一下列表会跳回顶部。
+  rebuildServerRows(RowScrollIntent::Preserve);
 }
 
 void LoginView::onChangeIconRequested(const QString &serverId) {

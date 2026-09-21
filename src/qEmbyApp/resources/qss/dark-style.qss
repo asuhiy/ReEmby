@@ -742,6 +742,27 @@ QPushButton#add-server-btn:hover {
     border-color: #3B82F6;
 }
 
+/* 底部左侧「隐藏 / 显示服务器地址」。刻意的次要动作：实线边框对虚线框、
+   中性文字对蓝色文字，视觉上比「添加新服务器」弱一档。 */
+QPushButton#toggle-url-btn {
+    background-color: #1E293B;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    color: #94A3B8;
+    font-size: 14px;
+    padding: 0px;
+}
+
+QPushButton#toggle-url-btn:hover {
+    background-color: #24334A;
+    border-color: #475569;
+    color: #E2E8F0;
+}
+
+QPushButton#toggle-url-btn:pressed {
+    background-color: #16202F;
+}
+
 QLineEdit,
 QComboBox {
     background-color: #0F172A;
