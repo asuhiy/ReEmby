@@ -187,6 +187,11 @@ constexpr const char* PlayerRelayReadaheadMb = "player/relay_readahead_mb"; // i
 // should stay close to what the kernel socket buffer accepts.
 constexpr const char* PlayerRelayHighWaterKb = "player/relay_high_water_kb";  // int KiB, default 2048
 constexpr const char* PlayerRelayPumpChunkKb = "player/relay_pump_chunk_kb";  // int KiB, default 1024
+// Ceiling for the relay's in-memory byte cache, in MiB (default 256). Lowering
+// it makes the cache overflow sooner, which is the only way to exercise the
+// eviction path with a small test file; raising it lets a medium-sized episode
+// fit entirely in cache.
+constexpr const char* PlayerRelayCacheLimitMb = "player/relay_cache_limit_mb"; // int MiB, default 256
 // Advanced mpv tuning (Settings -> Player). All values are read per file by
 // MpvWidget; empty values fall back to mpv defaults.
 constexpr const char* PlayerAudioChannels = "player/audio_channels";              // QString: auto|stereo|mono

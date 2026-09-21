@@ -399,6 +399,8 @@ void MpvWidget::loadMediaNow(const QString &url, const QString &serverId, bool w
             relayCfg->get<int>(ConfigKeys::PlayerRelayHighWaterKb, 2048);
         const int pumpChunkKbCfg =
             relayCfg->get<int>(ConfigKeys::PlayerRelayPumpChunkKb, 1024);
+        const int cacheLimitMbCfg =
+            relayCfg->get<int>(ConfigKeys::PlayerRelayCacheLimitMb, 256);
         MpvHttpStreamRelay::Tuning relayTuning;
         relayTuning.readaheadBytes =
             static_cast<qint64>(readaheadMbCfg > 0 ? readaheadMbCfg : 64) * 1024 * 1024;
@@ -406,6 +408,10 @@ void MpvWidget::loadMediaNow(const QString &url, const QString &serverId, bool w
             static_cast<qint64>(highWaterKbCfg > 0 ? highWaterKbCfg : 2048) * 1024;
         relayTuning.pumpChunkBytes =
             static_cast<qint64>(pumpChunkKbCfg > 0 ? pumpChunkKbCfg : 1024) * 1024;
+        // Cache ceiling. Lowering this makes the cache overflow on a small file,
+        // which is the only way to exercise the eviction path in a test.
+        relayTuning.cacheLimitBytes =
+            static_cast<qint64>(cacheLimitMbCfg > 0 ? cacheLimitMbCfg : 256) * 1024 * 1024;
         // prepare() 必须同步返回本地 URL，所以用阻塞式队列调用把它交给 relay
         // 线程执行；主线程只等 listen() + 生成 URL（毫秒级）。参数按值捕获，
         // 避免工作线程去读主线程的成员。

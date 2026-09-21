@@ -151,6 +151,7 @@ QUrl MpvHttpStreamRelay::prepare(const QUrl &targetUrl, const QString &serverId,
     m_socketHighWaterBytes = tuning.socketHighWaterBytes > 0 ? tuning.socketHighWaterBytes
                                                             : kCacheSocketHighWaterBytes;
     m_pumpChunkBytes = tuning.pumpChunkBytes > 0 ? tuning.pumpChunkBytes : kRelayPumpChunkBytes;
+    m_cacheLimitBytes = tuning.cacheLimitBytes > 0 ? tuning.cacheLimitBytes : kCacheMemoryLimitBytes;
     m_preparedNs = monotonicNs();
     m_firstByteLogged = false;
     m_redirectResolved = false;
@@ -169,7 +170,8 @@ QUrl MpvHttpStreamRelay::prepare(const QUrl &targetUrl, const QString &serverId,
             << "| proxyType:" << proxy.type()
             << "| readaheadMiB:" << (m_readaheadBytes / (1024 * 1024))
             << "| highWaterKiB:" << (m_socketHighWaterBytes / 1024)
-            << "| pumpChunkKiB:" << (m_pumpChunkBytes / 1024);
+            << "| pumpChunkKiB:" << (m_pumpChunkBytes / 1024)
+            << "| cacheLimitMiB:" << (m_cacheLimitBytes / (1024 * 1024));
 
     warmUpstreamRedirects();
 
@@ -664,6 +666,8 @@ void MpvHttpStreamRelay::resetCache()
     m_statHeadersToDoneNs = 0;
     m_statPumpWrites = 0;
     m_statDiscardedBytes = 0;
+    m_statEvictions = 0;
+    m_statEvictedBytes = 0;
     m_statPumpNs = 0;
     m_statWriteNs = 0;
     m_statAcceptInitNs = 0;
@@ -795,7 +799,7 @@ void MpvHttpStreamRelay::evictCacheIfNeeded()
     // Hot path: as long as the cache is within budget this is a single integer
     // comparison, which matters because appendToCache() calls it for every
     // 1 MiB chunk arriving from upstream.
-    if (m_cachedBytes <= kCacheMemoryLimitBytes)
+    if (m_cachedBytes <= m_cacheLimitBytes)
     {
         return;
     }
@@ -826,7 +830,7 @@ void MpvHttpStreamRelay::evictCacheIfNeeded()
         return block.hits >> static_cast<int>(shifts);
     };
 
-    while (m_cachedBytes > kCacheMemoryLimitBytes && m_cache.size() > 1)
+    while (m_cachedBytes > m_cacheLimitBytes && m_cache.size() > 1)
     {
         int victim = 0;
         qint64 victimHits = 0;
@@ -854,7 +858,10 @@ void MpvHttpStreamRelay::evictCacheIfNeeded()
                 victimLastNs = block.lastHitNs;
             }
         }
-        m_cachedBytes -= m_cache.at(victim).data.size();
+        const qint64 victimBytes = m_cache.at(victim).data.size();
+        m_cachedBytes -= victimBytes;
+        m_statEvictedBytes += victimBytes;
+        ++m_statEvictions;
         m_cache.remove(victim);
     }
 }
@@ -1840,6 +1847,8 @@ void MpvHttpStreamRelay::logActivitySummary()
              << "| turnarounds:" << m_statTurnarounds
              << "| turnaroundUs:" << (m_statTurnaroundNs / qMax<qint64>(1, m_statTurnarounds) / 1000)
              << "| cachedBytes:" << m_cachedBytes
+             << "| evictions:" << m_statEvictions
+             << "| evictedBytes:" << m_statEvictedBytes
              << "| redirects:" << m_statRedirects
              << "| fetches:" << m_statFetches
              << "| bytesFromCache:" << m_statBytesFromCache

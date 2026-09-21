@@ -52,6 +52,10 @@ public:
         // the kernel socket buffer accepts avoids piling megabytes into Qt's
         // write buffer, where every drain shifts the remainder.
         qint64 pumpChunkBytes = 1024 * 1024;
+        // Ceiling for the byte-range cache. 0 means "use the built-in default",
+        // which is what every call site does unless the user overrides
+        // player/relay_cache_limit_mb.
+        qint64 cacheLimitBytes = 0;
     };
 
     explicit MpvHttpStreamRelay(QObject *parent = nullptr);
@@ -202,6 +206,9 @@ private:
     // Byte-range cache (memory only for now; see tools/relay-design.md).
     QVector<CacheBlock> m_cache;
     qint64 m_cachedBytes = 0;
+    // Effective ceiling for m_cachedBytes; taken from Tuning in prepare(), so
+    // it can be overridden per media via player/relay_cache_limit_mb.
+    qint64 m_cacheLimitBytes = 256 * 1024 * 1024;
     qint64 m_totalSize = -1;          // from upstream Content-Range; -1 = unknown
     QByteArray m_contentType;
     bool m_rangeUnsupported = false;  // upstream answered 200 to a Range request
@@ -231,6 +238,11 @@ private:
     qint64 m_statHeadersToDoneNs = 0;
     qint64 m_statPumpWrites = 0;
     qint64 m_statDiscardedBytes = 0; // written into the socket, dropped at close
+    // Eviction accounting. This is the only direct evidence that the heat-based
+    // eviction ran at all: with the default 256 MiB ceiling a small file never
+    // overflows, and its effect would otherwise be invisible in the log.
+    qint64 m_statEvictions = 0;
+    qint64 m_statEvictedBytes = 0;
     // CPU attribution: time inside the two calls that dominate the
     // per-connection cost, summed over every invocation (nanoseconds).
     qint64 m_statPumpNs = 0;  // pumpCacheToSocket, including its turnarounds
