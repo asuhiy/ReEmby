@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <QEvent>
 #include <QFont>
+#include <QFontMetrics>
 #include <QFrame>
 #include <QHBoxLayout>
 #include <QIcon>
@@ -45,6 +46,15 @@ constexpr int kServerListPadding = 32;
 constexpr int kAddServerRowHeight = 52;
 // 「连接服务器」表单页的宽度：页面整体是 600 宽，但表单保持原来的窄宽度居中。
 constexpr int kAddFormWidth = 360;
+// 一行里被固定部件占掉的宽度：左边距 16 + 图标 46 + 图标后间距 16 +
+// 末尾「⋮」按钮 28 + 右边距 12。剩下的宽度才留给服务器名 / 地址，
+// 用于提前做省略号（QLabel 自己不会 elide，超出只会硬裁）。
+constexpr int kServerRowChrome = 16 + 46 + 16 + 28 + 12;
+// 再留 16px 安全余量：行数超过 5 行时会出现垂直滚动条、占掉一点视口宽度，
+// 不留余量的话省略号又会紧贴着被二次裁掉。
+constexpr int kServerRowTextSlack = 16;
+constexpr int kServerRowTextWidth =
+    kServerListWidth - kServerRowChrome - kServerRowTextSlack;
 }  // namespace
 
 // 服务器行内点击：行里的子控件（标签）不接受鼠标事件，会冒泡到行；
@@ -787,27 +797,33 @@ QWidget *LoginView::createServerRow(const ServerProfile &server) {
   auto *infoLayout = new QVBoxLayout();
   infoLayout->setSpacing(2);
 
-  auto *nameLabel = new QLabel(server.name, row);
+  auto *nameLabel = new QLabel(row);
   nameLabel->setObjectName("server-name-label");
   QFont nameFont = nameLabel->font();
   nameFont.setPixelSize(15);
   nameFont.setBold(true);
   nameLabel->setFont(nameFont);
-  // 忽略水平 sizeHint：长服务器名 / URL 不会把列表撑出横向滚动条，
-  // 行宽完全由容器决定，超出部分裁切。
+  // 水平方向忽略 sizeHint：长服务器名 / URL 不会把列表撑出横向滚动条。
+  // 注意：Ignored 会让 QWidgetItem::sizeHint().width() 直接变成 0，所以这一行
+  // 必须靠下面的 addLayout(infoLayout, 1) 拿到宽度 —— 不能用 addStretch()，
+  // 否则信息区会被压成 0 宽、名字和地址整个不显示。
   nameLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+  nameLabel->setText(QFontMetrics(nameFont).elidedText(
+      server.name, Qt::ElideRight, kServerRowTextWidth));
 
-  auto *urlLabel = new QLabel(server.url, row);
+  auto *urlLabel = new QLabel(row);
   urlLabel->setObjectName("server-url-label");
   QFont urlFont = urlLabel->font();
   urlFont.setPixelSize(12);
   urlLabel->setFont(urlFont);
   urlLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+  // 地址用中间省略：保住 host 和结尾，比只裁尾巴可读。
+  urlLabel->setText(QFontMetrics(urlFont).elidedText(
+      server.url, Qt::ElideMiddle, kServerRowTextWidth));
 
   infoLayout->addWidget(nameLabel);
   infoLayout->addWidget(urlLabel);
-  rowLayout->addLayout(infoLayout);
-  rowLayout->addStretch();
+  rowLayout->addLayout(infoLayout, 1);
 
   // 行尾「⋮」：编辑 / 排序 / 删除都收进菜单，行本身只负责登录。
   auto *menuBtn = new QPushButton(row);
