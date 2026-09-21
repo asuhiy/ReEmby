@@ -156,9 +156,19 @@ bool MpvController::init(bool standalone, void *wid) {
     // mpv 自身以及其它模块的 warning 不受影响。
     // 模块名必须写到子模块级：mpv 日志里的前缀是 "ffmpeg/video"，
     // 只写 "ffmpeg" 匹配不上（v0.41 实测无效）。
-    mpv_set_option_string(m_mpv, "msg-level",
-                          "ffmpeg=error,ffmpeg/video=error,ffmpeg/audio=error,ffmpeg/demux=error");
-    mpv_request_log_messages(m_mpv, "info");
+    const char *ffmpegQuiet =
+        "ffmpeg=error,ffmpeg/video=error,ffmpeg/audio=error,ffmpeg/demux=error";
+    // 诊断开关（config.ini 的 [player] mpv_verbose_log=true，默认关）：
+    // 连接、缓冲、seek 这些排查起播慢最需要的信息都是 verbose(v) 级，
+    // 默认的 info 会把它们全滤掉 —— 日志里就会莫名出现几十秒的空白。
+    // 两级都要放开：msg-level 决定 mpv 内部生成哪些消息，
+    // mpv_request_log_messages 决定往客户端送哪些，缺一个都收不到。
+    const bool mpvVerboseLog = ConfigStore::instance()->get<bool>(
+        ConfigKeys::PlayerMpvVerboseLog, false);
+    const QByteArray msgLevel =
+        mpvVerboseLog ? QByteArray("all=v,") + ffmpegQuiet : QByteArray(ffmpegQuiet);
+    mpv_set_option_string(m_mpv, "msg-level", msgLevel.constData());
+    mpv_request_log_messages(m_mpv, mpvVerboseLog ? "v" : "info");
 
     
     
