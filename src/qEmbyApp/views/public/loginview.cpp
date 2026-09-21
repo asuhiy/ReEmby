@@ -716,8 +716,8 @@ void LoginView::setupAddPage() {
   updateSslOptionsVisibility();
 }
 
-void LoginView::refreshServerList() {
-  rebuildServerRows();
+void LoginView::refreshServerList(RowScrollIntent intent) {
+  rebuildServerRows(intent);
 
   if (m_core->serverManager()->servers().isEmpty()) {
     // 全新安装 / 删光服务器：直接进表单页，少点一次。
@@ -810,6 +810,11 @@ void LoginView::rebuildServerRows(RowScrollIntent intent) {
       return;
     case RowScrollIntent::Bottom:
       bar->setValue(bar->maximum());
+      return;
+    // 删除一行后用：停在原位置，只在新范围内夹取。被删的那行消失后
+    // 下面的行自然补位，其余行不该跳。
+    case RowScrollIntent::Preserve:
+      bar->setValue(qBound(0, previousScroll, bar->maximum()));
       return;
     case RowScrollIntent::StepUp:
       bar->setValue(qBound(0, previousScroll - kRowStep, bar->maximum()));
@@ -1094,10 +1099,23 @@ void LoginView::onRemoveServerClicked(const QString &serverId) {
                                  tr("Remove"), 
                                  tr("Cancel"), 
                                  ModernMessageBox::Danger);
-  if (confirm) {
-    m_core->serverManager()->removeServer(serverId);
-    refreshServerList();
+  if (!confirm) {
+    return;
   }
+
+  // 删掉的正是「上次使用的服务器」时，这条记忆也一并清掉：
+  // ServerManager::removeServer 只清理 server/<id>/ 前缀下的键，而这个键
+  // 不在其中，留着就成了指向已删除服务器的脏数据 —— 之后任何走
+  // KeepSelected 的重建都会"找不到目标"而停在列表顶部。
+  ConfigStore *config = ConfigStore::instance();
+  if (config &&
+      config->get<QString>(ConfigKeys::LastSelectedServerId) == serverId) {
+    config->remove(ConfigKeys::LastSelectedServerId);
+  }
+
+  m_core->serverManager()->removeServer(serverId);
+  // 保持删除前的滚动位置：被删的那行消失后下面的行补位，其余行不该跳。
+  refreshServerList(RowScrollIntent::Preserve);
 }
 
 

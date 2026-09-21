@@ -124,19 +124,21 @@ private:
     void setupUi();
     void setupListPage();
     void setupAddPage();
-    void refreshServerList();
 
     // 列表重排后滚动条该停在哪。
     // 重建行会把内容清空、滚动位置被夹回顶部，所以重排后必须显式定位，
     // 否则用户上/下移一台服务器后视角会跳回列表开头。
     enum class RowScrollIntent {
         KeepSelected,  // 把上次使用的服务器滚进可见区（默认）
+        Preserve,      // 保持删除前的滚动位置（删掉一行后其余行不该跳）
         Top,           // 置顶 -> 滚到顶部
         Bottom,        // 置底 -> 拉到最底部
         StepUp,        // 上移一格 -> 滚动条跟一行，被移动项在视口里的位置不变
         StepDown,      // 下移一格 -> 同上
     };
 
+    void refreshServerList(
+        RowScrollIntent intent = RowScrollIntent::KeepSelected);
     // 清空并重建列表页里的服务器行（不含底部「添加新服务器」行），
     // 同时按行数调整滚动区高度：<= 5 行不滚动，> 5 行封顶并出现滚动条。
     void rebuildServerRows(
