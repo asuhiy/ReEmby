@@ -24,6 +24,41 @@ QString extractCharsetName(const QString &contentType)
     return match.hasMatch() ? match.captured(1).trimmed() : QString();
 }
 
+// 服务器的拒绝理由往往只写在响应体里。典型例子：反代（nginx 等）的 UA /
+// IP 白名单拦截页，正文是 "当前访问已被UA名单拦截" 这种明文 —— 不把它带出来，
+// 用户只能看到一个空的 "server replied:"，完全不知道发生了什么。
+//
+// 只做保守处理：剥掉标签和 style/script 块，压平空白，截断到 160 字。
+// 纯文本 / JSON 响应体则原样截断返回。
+QString extractErrorBodyHint(const QByteArray &body)
+{
+    if (body.isEmpty()) {
+        return QString();
+    }
+
+    QString text = QString::fromUtf8(body).trimmed();
+    if (text.isEmpty()) {
+        return QString();
+    }
+
+    if (text.contains(QLatin1Char('<'))) {
+        static const QRegularExpression blockRe(
+            QStringLiteral("<(style|script)[^>]*>.*?</\\1>"),
+            QRegularExpression::DotMatchesEverythingOption
+                | QRegularExpression::CaseInsensitiveOption);
+        text.remove(blockRe);
+        static const QRegularExpression tagRe(QStringLiteral("<[^>]+>"));
+        text.remove(tagRe);
+        text = text.simplified();
+    }
+
+    constexpr int kMaxHintChars = 160;
+    if (text.size() > kMaxHintChars) {
+        text = text.left(kMaxHintChars) + QStringLiteral("…");
+    }
+    return text;
+}
+
 bool isUtf8Charset(const QString &charset)
 {
     const QString normalized = charset.trimmed().toLower();
@@ -258,6 +293,12 @@ QJsonObject NetworkManager::parseReply(QNetworkReply* reply) {
                    << "| responseBody:" << responseBody.left(500);
         
         QString errorMsg = buildReplyErrorMessage(reply, httpStatus);
+        // 服务器常在响应体里写明拒绝原因（例如反代的 UA / IP 名单拦截页）。
+        // 错误分支本来就不会再把 body 交出去，在这里取走是安全的。
+        const QString bodyHint = extractErrorBodyHint(reply->readAll());
+        if (!bodyHint.isEmpty() && !errorMsg.contains(bodyHint)) {
+            errorMsg += QStringLiteral("\n") + bodyHint;
+        }
         notifyServerUnavailableIfNeeded(reply, httpStatus);
         throw std::runtime_error(errorMsg.toStdString());
     }
@@ -433,6 +474,12 @@ QString NetworkManager::parseReplyAsText(QNetworkReply* reply) {
                    << "| sslErrors:"
                    << reply->property("sslErrorsSummary").toString();
         QString errorMsg = buildReplyErrorMessage(reply, httpStatus);
+        // 服务器常在响应体里写明拒绝原因（例如反代的 UA / IP 名单拦截页）。
+        // 错误分支本来就不会再把 body 交出去，在这里取走是安全的。
+        const QString bodyHint = extractErrorBodyHint(reply->readAll());
+        if (!bodyHint.isEmpty() && !errorMsg.contains(bodyHint)) {
+            errorMsg += QStringLiteral("\n") + bodyHint;
+        }
         notifyServerUnavailableIfNeeded(reply, httpStatus);
         throw std::runtime_error(errorMsg.toStdString());
     }
@@ -539,6 +586,12 @@ QByteArray NetworkManager::parseReplyAsBytes(QNetworkReply* reply,
                    << "| sslErrors:"
                    << reply->property("sslErrorsSummary").toString();
         QString errorMsg = buildReplyErrorMessage(reply, httpStatus);
+        // 服务器常在响应体里写明拒绝原因（例如反代的 UA / IP 名单拦截页）。
+        // 错误分支本来就不会再把 body 交出去，在这里取走是安全的。
+        const QString bodyHint = extractErrorBodyHint(reply->readAll());
+        if (!bodyHint.isEmpty() && !errorMsg.contains(bodyHint)) {
+            errorMsg += QStringLiteral("\n") + bodyHint;
+        }
         notifyServerUnavailableIfNeeded(reply, httpStatus);
         throw std::runtime_error(errorMsg.toStdString());
     }
