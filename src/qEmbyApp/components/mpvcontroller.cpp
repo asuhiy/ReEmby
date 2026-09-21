@@ -158,17 +158,29 @@ bool MpvController::init(bool standalone, void *wid) {
     // 只写 "ffmpeg" 匹配不上（v0.41 实测无效）。
     const char *ffmpegQuiet =
         "ffmpeg=error,ffmpeg/video=error,ffmpeg/audio=error,ffmpeg/demux=error";
-    // 诊断开关（config.ini 的 [player] mpv_verbose_log=true，默认关）：
-    // 连接、缓冲、seek 这些排查起播慢最需要的信息都是 verbose(v) 级，
-    // 默认的 info 会把它们全滤掉 —— 日志里就会莫名出现几十秒的空白。
+    // mpv 日志级别（「设置 → 通用 → mpv 日志级别」，默认 info）：连接、缓冲、
+    // seek 这些排查起播慢最需要的信息都是 verbose(v) 级，默认的 info 会把它们
+    // 全滤掉 —— 日志里就会莫名出现几十秒的空白。
     // 两级都要放开：msg-level 决定 mpv 内部生成哪些消息，
     // mpv_request_log_messages 决定往客户端送哪些，缺一个都收不到。
-    const bool mpvVerboseLog = ConfigStore::instance()->get<bool>(
-        ConfigKeys::PlayerMpvVerboseLog, false);
+    // 取值走白名单：配置里写了别的一律按 info，不把任意字符串塞给 msg-level。
+    QString mpvLogLevel =
+        ConfigStore::instance()
+            ->get<QString>(ConfigKeys::PlayerMpvLogLevel, QStringLiteral("info"))
+            .trimmed()
+            .toLower();
+    if (mpvLogLevel != QLatin1String("v") &&
+        mpvLogLevel != QLatin1String("debug")) {
+        mpvLogLevel = QStringLiteral("info");
+    }
+    const bool verboseLog = (mpvLogLevel != QLatin1String("info"));
+    const QByteArray levelBytes = mpvLogLevel.toUtf8();
     const QByteArray msgLevel =
-        mpvVerboseLog ? QByteArray("all=v,") + ffmpegQuiet : QByteArray(ffmpegQuiet);
+        verboseLog
+            ? QByteArray("all=") + levelBytes + "," + ffmpegQuiet
+            : QByteArray(ffmpegQuiet);
     mpv_set_option_string(m_mpv, "msg-level", msgLevel.constData());
-    mpv_request_log_messages(m_mpv, mpvVerboseLog ? "v" : "info");
+    mpv_request_log_messages(m_mpv, levelBytes.constData());
 
     
     

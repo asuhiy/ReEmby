@@ -197,10 +197,11 @@ constexpr const char* PlayerStreamBufferSize = "player/stream_buffer_size";     
 constexpr const char* PlayerDemuxerMaxBytes = "player/demuxer_max_bytes";         // int MiB, default 1536
 constexpr const char* PlayerDemuxerMaxBackBytes = "player/demuxer_max_back_bytes";// int MiB, default 0
 constexpr const char* PlayerDemuxerReadaheadSecs = "player/demuxer_readahead_secs";// int s, default 1
-// 诊断用：把 mpv 的日志级别开到 verbose。连接建立、缓冲进度、每次 seek 的
-// 细节都是 v 级，平时不开（会把日志刷爆）；排查"起播慢 / 卡顿"时临时打开。
-// 没有对应的 UI 开关，直接在 config.ini 的 [player] 段加 mpv_verbose_log=true。
-constexpr const char* PlayerMpvVerboseLog = "player/mpv_verbose_log";             // bool, default false
+// mpv 的日志级别：info（默认）/ v（verbose）/ debug。连接建立、缓冲进度、
+// 每次 seek 的细节都是 verbose 级，平时收会把日志刷爆；排查"起播慢 / 卡顿"
+// 时调高即可看到完整时间线。UI 在「设置 → 通用 → mpv 日志级别」。
+// 取值按白名单处理（见 mpvcontroller.cpp），写别的会被当成 info。
+constexpr const char* PlayerMpvLogLevel = "player/mpv_log_level";                 // QString, default "info"
 constexpr const char* PlayerCurlBackend = "player/curl_backend";                  // bool (prefer libcurl)
 constexpr const char* PlayerTcpKeepAlive = "player/tcp_keepalive";                // bool
 constexpr const char* PlayerSeekStep = "player/seek_step";

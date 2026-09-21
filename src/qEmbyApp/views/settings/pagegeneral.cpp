@@ -182,6 +182,21 @@ PageGeneral::PageGeneral(QEmbyCore *core, QWidget *parent)
       tr("Record debug information to a log file for troubleshooting"),
       logSwitch, ConfigKeys::LogEnable, this));
 
+  // mpv 的日志级别（默认 info）。mpv 的连接建立 / 缓冲进度 / seek 细节都是
+  // verbose 级，默认会被滤掉 —— 排查「起播慢 / 卡顿」时日志里会莫名出现
+  // 几十秒空白，调到 Verbose 才有完整时间线。调高后日志增长很快，查完记得
+  // 调回来。（它只管 mpv 那部分；应用自身日志由上面那个开关控制。）
+  auto *mpvLogLevelCombo = new ModernComboBox(this);
+  mpvLogLevelCombo->addItem(tr("Info (Default)"), "info");
+  mpvLogLevelCombo->addItem(tr("Verbose"), "v");
+  mpvLogLevelCombo->addItem(tr("Debug"), "debug");
+  m_mainLayout->addWidget(new SettingsCard(
+      ":/svg/dark/mpv-conf.svg", tr("mpv Log Level"),
+      tr("How much detail mpv writes to the log. Raise it only when diagnosing "
+         "startup slowness or stutter - verbose output grows fast"),
+      mpvLogLevelCombo, ConfigKeys::PlayerMpvLogLevel, this,
+      QVariant("info")));
+
   
   auto *logPanel = new SettingsSubPanel(":/svg/dark/log-path.svg", this);
 

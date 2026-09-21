@@ -2293,6 +2293,26 @@ Continue from there?</source>
         <translation>启用日志</translation>
     </message>
     <message>
+        <source>mpv Log Level</source>
+        <translation>mpv 日志级别</translation>
+    </message>
+    <message>
+        <source>How much detail mpv writes to the log. Raise it only when diagnosing startup slowness or stutter - verbose output grows fast</source>
+        <translation>mpv 写入日志的详细程度。只在排查「起播慢 / 卡顿」时调高 —— 详细日志增长很快，查完记得调回 Info</translation>
+    </message>
+    <message>
+        <source>Info (Default)</source>
+        <translation>Info（默认）</translation>
+    </message>
+    <message>
+        <source>Verbose</source>
+        <translation>Verbose（详细）</translation>
+    </message>
+    <message>
+        <source>Debug</source>
+        <translation>Debug（调试）</translation>
+    </message>
+    <message>
         <source>Record debug information to a log file for troubleshooting</source>
         <translation>将调试信息记录到日志文件，便于排查问题</translation>
     </message>
